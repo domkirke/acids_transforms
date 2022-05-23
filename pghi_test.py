@@ -20,16 +20,16 @@ if not os.path.isdir("reconstructions"):
 x, names = import_data("source_files", sr=sr)
 
 # Non Realtime
-# dgt_transform = DGT(n_fft, n_fft // hop_factor)
-# scripted_dgt = torch.jit.script(dgt_transform)
-# for i in tqdm.tqdm(range(x.shape[0]), desc="Exporting non-realtime PGHI", total=x.shape[0]):
-#     if USE_SCRIPT:
-#         x_dgt = scripted_dgt(x[i][0])
-#         x_inv = scripted_dgt.invert(x_dgt.abs(), tolerance)
-#     else:
-#         x_dgt = dgt_transform(x[i][0])
-#         x_inv = dgt_transform.invert(x_dgt.abs(), tolerance)
-#     torchaudio.save(f"reconstructions/{names[i]}.wav", x_inv.unsqueeze(0), sample_rate=sr)
+dgt_transform = DGT(n_fft, n_fft // hop_factor)
+scripted_dgt = torch.jit.script(dgt_transform)
+for i in tqdm.tqdm(range(x.shape[0]), desc="Exporting non-realtime PGHI", total=x.shape[0]):
+    if USE_SCRIPT:
+        x_dgt = scripted_dgt(x[i][0])
+        x_inv = scripted_dgt.invert(x_dgt.abs(), tolerance)
+    else:
+        x_dgt = dgt_transform(x[i][0])
+        x_inv = dgt_transform.invert(x_dgt.abs(), tolerance)
+    torchaudio.save(f"reconstructions/{names[i]}.wav", x_inv.unsqueeze(0), sample_rate=sr)
 
 # # Real-time
 dgt_transform = RealtimeDGT(n_fft, n_fft // hop_factor, batch_size=x.shape[1])
