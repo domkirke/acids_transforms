@@ -1,9 +1,11 @@
 from argparse import ArgumentError
+from typing import Tuple
+from . import heapq
 import torch, os, torchaudio, torch.nn as nn
 from . import torch_pi
 
 lambda_hash = {'hamming':0.29794, "hann": 0.25645, "blackmann":0.17954}
-
+eps = torch.finfo(torch.get_default_dtype()).eps
 
 def get_lambda(window_name):
     if isinstance(window_name, str):
@@ -47,7 +49,7 @@ def import_data(path: str, sr=44100):
             try: 
                 current_x, n = import_data(f"{path}/{f}")
                 data.append(current_x)
-                names.append(n)
+                names.append(os.path.splitext(os.path.basename(n))[0])
             except:
                 pass
         max_size = max([d.shape[1] for d in data])
@@ -85,74 +87,50 @@ def deriv(mag: torch.Tensor, order: int=2) -> torch.Tensor:
         magd = 2* torch.pi * torch.fft.ifft(1j*torch.fft.fft(mag, dim=0), dim=0)
     return magd
 
-def modgabphasegrad(mag, n_fft, hop_length, gamma=None):
-    """
-    https://github.com/andimarafioti/tifresi/blob/676db371d5c472a5f3199506bf3863367a2ecde4/tifresi/phase/modGabPhaseGrad.py#L77
-    a : length of time shift
-    g : window function
-    M : number of frequency channels
-    """
-    if gamma is None: gamma = 2*torch.pi*((-n_fft**2/(8*torch.log(0.01)))**.5)**2
-    fmul = gamma/(hop_length * n_fft)
-    Y = torch.empty((mag.shape[0]+2,mag.shape[1]+2),dtype=mag.dtype)
-    Y[1:-1,1:-1] = torch.log(mag + 1e-50)
-    Y[0,:] = Y[1,:]
-    Y[-1,:] = Y[-2,:]
-    Y[:,0] = Y[:,1]
-    Y[:,-1] = Y[:,-2]
-    dxdw = (Y[1:-1,2:]-Y[1:-1,:-2])/2
-    dxdt = (Y[2:,1:-1]-Y[:-2,1:-1])/2
-    fgradw = dxdw/fmul + (2*torch.pi*hop_length/n_fft)*torch.arange(int(n_fft/2)+1)
-    tgradw = -fmul*dxdt + torch.pi
-    return (tgradw, fgradw)
-
-"""""
-def modgabphasegrad(mag, n_fft, hop_size, difforder=2):
-    M2 = mag.shape[-2]
-    N = mag.shape[-1]
-    M = n_fft
-    L = N * hop_size
-    tfr = hop_size * M / L # time-frequency ratio
-    mag_log = (mag + 1e-10).log()
-    magmax = mag_log.max()
-    log_range = -11.
-    mag_log[mag_log < (magmax + log_range)] = log_range
-
-    fgrad = deriv(mag_log.transpose(-2, -1), difforder).transpose(-2, -1) / (2*torch.pi) * tfr 
-    tgrad = deriv(mag_log, difforder) / (2 * torch.pi * tfr) * (M/M2)
-
-    tgrad[0, :] = 0
-    tgrad[-1, :] = 0
-    return (tgrad, fgrad)
-"""""
 
 class PriorityQueue(nn.Module):
     def __init__(self):
-        self.keys = torch.Tensor([])
-        self.values = torch.Tensor([])
+        super().__init__()
+        self.clear()
 
-    def __len__(self):
-        return self.keys.size(0)
-    
-    def insert(self, key, value):
+    def clear(self):
+        self.heap = []
+
+    def len(self) -> int:
+        return len(self.heap)
+
+    def insert(self, key: torch.Tensor, value: torch.Tensor) -> None:
+        """
         if self.keys.size(0) == 0:
-            self.keys = torch.Tensor([key])
-            self.values = value
+            self.keys = key.unsqueeze(0)
+            self.values = value.unsqueeze(0)
         else:
             idx = (self.keys < key).nonzero()
             if idx.numel() == 0:
-                self.keys = torch.cat([self.keys, torch.Tensor([key])])
-                self.values = torch.cat([self.values, torch.Tensor(value)])
+                self.keys = torch.cat([self.keys, key.unsqueeze(0)])
+                self.values = torch.cat([self.values, value.unsqueeze(0)])
             else:
                 idx = idx.min()
-                self.keys = torch.cat([self.keys[:idx], torch.Tensor([key]), self.keys[idx:]])
-                self.values = torch.cat([self.values[:idx], value, self.values[idx:]])
+                self.keys = torch.cat([self.keys[:idx], key.unsqueeze(0), self.keys[idx:]])
+                self.values = torch.cat([self.values[:idx], value.unsqueeze(0), self.values[idx:]])
+        return 
+        """
+        heapq.heappush(self.heap, (float(key), value))
 
     def pop(self):
+        """
         k, v = self.keys[-1], self.values[-1]
         self.keys = self.keys[:-1]
         self.values = self.values[:-1]
         return k, v
+        """
+        lastelt = self.heap.pop()    # raises appropriate IndexError if heap is empty
+        if len(self.heap) > 0:
+            returnitem = self.heap[0]
+            self.heap[0] = lastelt
+            heapq._siftup(self.heap, 0)
+            return returnitem
+        return lastelt
 
 def get_fft_idx(L):
     if L % 2 == 0:
