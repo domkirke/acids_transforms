@@ -5,12 +5,20 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Python : Fichier actuel",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
             "name": "pghi_test",
             "type": "python",
             "request": "launch",
             "program": "pghi_test.py",
             "console": "integratedTerminal",
-            "justMyCode": true 
+            "justMyCode": true
         }
     ]
 }

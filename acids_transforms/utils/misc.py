@@ -2,17 +2,8 @@ from argparse import ArgumentError
 from typing import Tuple
 from . import heapq
 import torch, os, torchaudio, torch.nn as nn
-from . import torch_pi
 
-lambda_hash = {'hamming':0.29794, "hann": 0.25645, "blackmann":0.17954}
 eps = torch.finfo(torch.get_default_dtype()).eps
-
-def get_lambda(window_name):
-    if isinstance(window_name, str):
-        for k, v in lambda_hash.items():
-            if k in window_name:
-                return v
-    return 1.
 
 def unwrap(tensor: torch.Tensor):
     """
@@ -20,20 +11,15 @@ def unwrap(tensor: torch.Tensor):
     :param tensor: phase to unwrap (seq x spec_bin)
     :return: unwrapped phase
     """
-    if isinstance(tensor, list):
-        return [unwrap(t) for t in tensor]
-    if tensor.ndimension() == 2:
-        unwrapped = tensor.clone()
-        diff = tensor[1:] - tensor[:-1]
-        ddmod = (diff + torch_pi)%(2 * torch_pi) - torch_pi
-        mask = (ddmod == -torch_pi).bitwise_and(diff > 0)
-        ddmod[mask] = torch_pi
-        ph_correct = ddmod - diff
-        ph_correct[diff.abs() < torch_pi] = 0
-        unwrapped[1:] = tensor[1:] + torch.cumsum(ph_correct, 1)
-        return unwrapped
-    else:
-        return torch.stack([unwrap(tensor[i]) for i in range(tensor.size(0))], dim=0)
+    unwrapped = tensor.clone()
+    diff = tensor[..., 1:, :] - tensor[..., :-1, :]
+    ddmod = (diff + torch.pi)%(2 * torch.pi) - torch.pi
+    mask = (ddmod == -torch.pi).bitwise_and(diff > 0)
+    ddmod[mask] = torch.pi
+    ph_correct = ddmod - diff
+    ph_correct[diff.abs() < torch.pi] = 0
+    unwrapped[..., 1:, :] = tensor[..., 1:, :] + torch.cumsum(ph_correct, -2)
+    return unwrapped
 
 
 def import_data(path: str, sr=44100):
@@ -67,7 +53,44 @@ def import_data(path: str, sr=44100):
     else:
         raise FileNotFoundError(path)
 
+
+def fdiff_forward(x):
+    inst_f = torch.cat([x[..., 0, :].unsqueeze(-2), (x[..., 1:, :] - x[..., :-1, :])/2], dim=-2)
+    return inst_f
+
+def fdiff_backward(x):
+    x = x.flip(-2)
+    inst_f = fdiff_forward(x)
+    inst_f = inst_f.flip(-2)
+    return inst_f
+
+def fdiff_central(x):
+    inst_f = torch.cat([x[..., 0, :].unsqueeze(-2), (x[..., 2:, :] - x[..., :-2, :])/4, x[..., -1, :].unsqueeze(-2)], dim=-2)
+    return inst_f
+
+def fint_forward(x):
+    out = x
+    out[..., 1:, :] = out[..., 1:, :] * 2
+    out = torch.cumsum(out, -2)
+    return out
+
+def fint_backward(x):
+    out = x.flip(-2)
+    out = fint_forward(out)
+    out = out.flip(-2)
+    return out
+
+def fint_central(x):
+    out = torch.zeros_like(x)
+    out[..., 0, :] = x[..., 0, :]
+    out[..., -1, :] = x[..., -1, :]
+    for i in range(2, x.shape[-2], 2):
+        out[..., i, :] = out[..., i-2, :] + 4 * x[..., i-1, :]
+    for i in range(x.shape[-2]-1, 0, -2):
+        out[..., i-2, :] = out[..., i, :] - 4 * x[..., i-1, :]
+    return out
         
+
 def deriv(mag: torch.Tensor, order: int=2) -> torch.Tensor:
     """
     https://gitlab.lis-lab.fr/dev/ltfatpy/-/blob/master/ltfatpy/fourier/pderiv.py
@@ -88,50 +111,6 @@ def deriv(mag: torch.Tensor, order: int=2) -> torch.Tensor:
     return magd
 
 
-class PriorityQueue(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.clear()
-
-    def clear(self):
-        self.heap = []
-
-    def len(self) -> int:
-        return len(self.heap)
-
-    def insert(self, key: torch.Tensor, value: torch.Tensor) -> None:
-        """
-        if self.keys.size(0) == 0:
-            self.keys = key.unsqueeze(0)
-            self.values = value.unsqueeze(0)
-        else:
-            idx = (self.keys < key).nonzero()
-            if idx.numel() == 0:
-                self.keys = torch.cat([self.keys, key.unsqueeze(0)])
-                self.values = torch.cat([self.values, value.unsqueeze(0)])
-            else:
-                idx = idx.min()
-                self.keys = torch.cat([self.keys[:idx], key.unsqueeze(0), self.keys[idx:]])
-                self.values = torch.cat([self.values[:idx], value.unsqueeze(0), self.values[idx:]])
-        return 
-        """
-        heapq.heappush(self.heap, (float(key), value))
-
-    def pop(self):
-        """
-        k, v = self.keys[-1], self.values[-1]
-        self.keys = self.keys[:-1]
-        self.values = self.values[:-1]
-        return k, v
-        """
-        lastelt = self.heap.pop()    # raises appropriate IndexError if heap is empty
-        if len(self.heap) > 0:
-            returnitem = self.heap[0]
-            self.heap[0] = lastelt
-            heapq._siftup(self.heap, 0)
-            return returnitem
-        return lastelt
-
 def get_fft_idx(L):
     if L % 2 == 0:
         n = torch.cat([torch.arange(0, L//2+1), torch.arange(-L//2+1, 0)])
@@ -140,8 +119,23 @@ def get_fft_idx(L):
     return n
 
 
-def gaussian_window(N, hop_length, L):
-    t = torch.arange(-N//2, N//2)
-    tfr = N * hop_length
-    return torch.exp( - torch.pi * tfr * t**2 )
+def pad(tensor, target_size, dim):
+    if tensor.size(dim) > target_size:
+        return tensor
+    cat_tensor = torch.zeros((*tensor.shape[:dim], target_size - tensor.shape[dim], *tensor.shape[dim+1:]), dtype=tensor.dtype, device=tensor.device)
+    return torch.cat([tensor, cat_tensor], dim=dim)
 
+
+def frame(tensor, wsize, hsize, dim):
+    if dim < 0:
+        dim = tensor.ndim + dim
+    if not tensor.is_contiguous():
+        tensor = tensor.contiguous()
+    n_windows = tensor.shape[dim] // hsize
+    tensor = pad(tensor, n_windows * hsize + wsize,  dim)
+    shape = tuple(tensor.shape)
+    strides = tensor.stride()
+    shape = shape[:dim] + (n_windows, wsize) + shape[dim+1:]
+    strides = strides[:dim] + (hsize,) + strides[dim:]
+    #strides = list(strides[dim:], (strides[dim]*hsize) + [hsize * new_stride] + list(strides[dim+1:])
+    return torch.as_strided(tensor, shape, strides)
