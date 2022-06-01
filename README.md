@@ -5,40 +5,23 @@ A bunch of scriptable audio transforms based on the torchaudio backend, embeddab
 Available transforms:
 
 
-Titre colonne 1 (droite) | Titre colonne 1 (centré) | Titre colonne 1 (gauche)
+**transform name** | **invertible** | **scriptable**
  :--- | :---: | :---: 
 **raw**
-MuLaw | | 
-Window | |
-Mono | | 
+MuLaw | yes | yes
+Window | yes | yes
+Mono | yes | yes
 Stereo
 **spectral**
-STFT / RealtimeSTFT
-DGT / RealtimeDGT
-MFCC
+STFT / RealtimeSTFT  | yes | yes
+DGT / RealtimeDGT | yes | yes
+MFCC | no | yes
 **representations**
-Real / Imaginary
-Magnitude / Phase
-Instantaneous Frequency
+Real / Imaginary  | yes | yes
+Magnitude / Phase | yes | yes
+Instantaneous Frequency | yes | yes
 **normalization**
-Normalize
-
-**Raw**
-- MuLaw
-- Window
-- Mono/Stereo
-
-**Spectral**
-- STFT / RealtimeSTFT
-- DGT / RealtimeDGT (with PGHI)
-- Real / Imaginary / Magnitude 
-- Phase / Instantaneous Frequency
-- MFCC
-
-**Normalization**
-- Unipolar ([0;1])
-- Bipolar ([-1;1])
-- Gaussian (centered)
+Normalize | yes | yes
 
 
 ## Installation
