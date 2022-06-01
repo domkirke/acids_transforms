@@ -31,8 +31,8 @@ class DGT(STFT):
                    f"inversion_mode = {self.inversion_mode})"
         return repr_str
 
-    def __init__(self, n_fft: int = 1024, hop_length: int = 256, dtype: torch.dtype = None, inversion_mode: InversionEnumType = "pghi"):
-        nn.Module.__init__(self)
+    def __init__(self, sr: int = 44100, n_fft: int = 1024, hop_length: int = 256, dtype: torch.dtype = None, inversion_mode: InversionEnumType = "pghi"):
+        AudioTransform.__init__(self, sr)
         dtype = dtype or torch.get_default_dtype()
         self.register_buffer("n_fft", torch.zeros(1).long())
         self.register_buffer("hop_length", torch.zeros(1).long())
@@ -126,20 +126,19 @@ class DGT(STFT):
         return torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), window=window, onesided=True)
 
     def pghi(self, mag: torch.Tensor, tolerance: float = 1e-6) -> torch.Tensor:
-        #l = get_lambda(window_fn.__name__) * n_fft**2
-        # if mag.ndim > 2:
-        #     return torch.stack([self.hgi(m, n_fft, hop_size, tolerance, gamma, order) for m in mag])
         mag = torch.clamp(mag.clone(), self.eps, None)
         # get derivatives
         tgradw, fgradw = self.modgabphasegrad(mag)
         # prepare integration
         abstol = torch.tensor(self.eps, dtype=mag.dtype)
-        #mag = torch.where(mag >= tolerance, mag, torch.full_like(mag, abstol))
         return self.perform_hgi(mag, tgradw, fgradw, abstol, tolerance)
 
     @staticmethod
     def get_inversion_modes():
         return ["pghi", "griffin_lim", "random", "keep_input"]
+    
+    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
+        return AudioTransform.forward_with_time(self, x, time)
 
     def perform_hgi(self, X: torch.Tensor, tgradw: torch.Tensor, fgradw: torch.Tensor, abstol: float = 1e-7, tol: float = 1e-6) -> torch.Tensor:
         spectrogram = X
@@ -211,7 +210,7 @@ class DGT(STFT):
         tgradw = -fmul*dxdt + torch.pi
         return (tgradw, fgradw)
 
-
+        
 class RTDGT_INVERSION_MODES(Enum):
     KEEP_INPUT = 0
     PGHI = 1
@@ -219,8 +218,8 @@ class RTDGT_INVERSION_MODES(Enum):
 
 
 class RealtimeDGT(DGT):
-    def __init__(self, n_fft=1024, hop_length=256, dtype=None, batch_size=2, inversion_mode: InversionEnumType = "pghi"):
-        super().__init__(n_fft, hop_length, dtype=dtype, inversion_mode=inversion_mode)
+    def __init__(self, sr: int = 44100, n_fft=1024, hop_length=256, dtype=None, batch_size=2, inversion_mode: InversionEnumType = "pghi"):
+        super().__init__(sr=sr, n_fft=n_fft, hop_length=hop_length, dtype=dtype, inversion_mode=inversion_mode)
         self.register_buffer(
             'hgi_mag_buffer', torch.zeros(batch_size, 2, n_fft//2+1))
         self.register_buffer("hgi_phase_buffer",
@@ -379,6 +378,18 @@ class RealtimeDGT(DGT):
             spectrogram[1, max_pos_f[0]] = abstol
         return new_phase
 
+    def test_forward(self, x: torch.Tensor, time: torch.Tensor = None):
+        x = frame(x, self.n_fft.item(), self.hop_length.item(), -1)
+        transform = []
+        for i in range(x.shape[-2]):
+            transform.append(self(x[..., i, :]))
+        transform = torch.stack(transform, -2)
+        if time is None:
+            return transform
+        else:
+            shifts = torch.arange(x.size(-2)) * self.hop_length.item() / self.sr
+            return transform, time + shifts
+
     # Tests
     def test_inversion(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         n_fft = self.n_fft.item()
@@ -393,11 +404,11 @@ class RealtimeDGT(DGT):
                            hop_length+n_fft] += self.invert(x_stft)
             for inv_type in self.get_inversion_modes():
                 outs[inv_type][:, n*hop_length:n*hop_length +
-                                    n_fft] += self.invert(x_stft.abs(), inversion_mode=inv_type)
+                               n_fft] += self.invert(x_stft.abs(), inversion_mode=inv_type)
         return outs
 
     @classmethod
-    def test_scripted_transform(cls, transform: AudioTransform):
+    def test_scripted_transform(cls, transform: AudioTransform, invert: bool = True):
         x = torch.zeros(2, transform.n_fft.item())
         x_t = transform(x)
         if cls.invertible:

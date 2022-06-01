@@ -31,12 +31,13 @@ class STFT(AudioTransform):
         return repr_str
 
     def __init__(self,
+                 sr: int = 44100,
                  n_fft: int = 1024,
                  hop_length: int = 256,
                  dtype: torch.dtype = None,
                  inversion_mode: str = "griffin_lim",
                  window: str = "hann"):
-        super().__init__()
+        super().__init__(sr=sr)
         dtype = dtype or torch.get_default_dtype()
         self.register_buffer("n_fft", torch.zeros(1).long())
         self.register_buffer("hop_length", torch.zeros(1).long())
@@ -75,7 +76,7 @@ class STFT(AudioTransform):
         self.gamma = self._get_gamma()
 
     def _get_gamma(self) -> torch.Tensor:
-        return torch.tensor(2*torch.pi*((-self.n_fft**2/(8*math.log(0.01)))**.5)**2)
+        return 2*torch.pi*((-self.n_fft**2/(8*math.log(0.01)))**.5)**2
 
     def _get_window(self) -> torch.FloatTensor:
         return self.window_type(self.n_fft.item())
@@ -120,7 +121,7 @@ class STFT(AudioTransform):
         elif (inversion_mode == "griffin_lim"):
             x_inv = self.griffin_lim(x, tolerance)
             return x_inv
-        elif (inversion_mode == "random") :
+        elif (inversion_mode == "random"):
             phase = torch.pi * 2 * torch.rand_like(x)
             x = x * torch.exp(phase * 1j)
             return torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), window=window, onesided=True)
@@ -143,11 +144,18 @@ class STFT(AudioTransform):
                 x_stft.abs(), inversion_mode=inv_type)
         return outs
 
+    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
+        transform = self.forward(x)
+        n_chunks = transform.size(2)
+        shifts = torch.arange(n_chunks) * self.hop_length / self.sr
+        new_time = shifts + time
+        return transform, new_time
+
     @classmethod
-    def test_scripted_transform(cls, transform: AudioTransform):
+    def test_scripted_transform(cls, transform: AudioTransform, invert: bool = True):
         x = torch.zeros(2, 44100)
         x_t = transform(x)
-        if cls.invertible:
+        if invert:
             x_inv = transform.invert(x_t)
             for inv_type in cls.get_inversion_modes():
                 x_inv = transform.invert(x_t.abs(), inversion_mode=inv_type)
@@ -155,9 +163,8 @@ class STFT(AudioTransform):
 
 class RealtimeSTFT(STFT):
 
-    def __init__(self, n_fft: int = 1024, hop_length: int = 256, dtype: torch.dtype = None, inversion_mode: InversionEnumType = "random", window: str = "hann"):
-        super().__init__(n_fft, hop_length, dtype, inversion_mode, window)
-
+    def __init__(self, sr: int = 44100, n_fft: int = 1024, hop_length: int = 256, dtype: torch.dtype = None, inversion_mode: InversionEnumType = "random", window: str = "hann"):
+        super().__init__(sr=sr, n_fft=n_fft, hop_length=hop_length, dtype=dtype, inversion_mode=inversion_mode, window=window)
 
     @property
     def scriptable(self):
@@ -226,14 +233,29 @@ class RealtimeSTFT(STFT):
                            hop_length+n_fft] += self.invert(x_stft)
             for inv_type in self.get_inversion_modes():
                 outs[inv_type][:, n*hop_length:n*hop_length +
-                                    n_fft] += self.invert(x_stft.abs(), inversion_mode=inv_type)
+                               n_fft] += self.invert(x_stft.abs(), inversion_mode=inv_type)
         return outs
 
+    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
+        return AudioTransform.forward_with_time(self, x, time)
+
+    def test_forward(self, x: torch.Tensor, time: torch.Tensor = None):
+        x = frame(x, self.n_fft.item(), self.hop_length.item(), -1)
+        transform = []
+        for i in range(x.shape[-2]):
+            transform.append(self(x[..., i, :]))
+        transform = torch.stack(transform, -2)
+        if time is None:
+            return transform
+        else:
+            shifts = torch.arange(x.size(-2)) * self.hop_length.item() / self.sr
+            return transform, time + shifts
+
     @classmethod
-    def test_scripted_transform(cls, transform: AudioTransform):
+    def test_scripted_transform(cls, transform: AudioTransform, invert: bool = True):
         x = torch.zeros(2, transform.n_fft.item())
         x_t = transform(x)
-        if cls.invertible:
+        if invert:
             x_inv = transform.invert(x_t)
             for inv_type in cls.get_inversion_modes():
                 x_inv = transform.invert(x_t.abs(), inversion_mode=inv_type)

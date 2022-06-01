@@ -1,4 +1,5 @@
 import abc
+from ast import NotIn
 import torch.nn as nn
 import torch
 from enum import Enum
@@ -31,18 +32,27 @@ class AudioTransform(nn.Module):
             raise TypeError(
                 'AudioTransform cannot be added to type: %s' % type(transform))
 
+    @torch.jit.export
+    def scale_data(self, x: torch.Tensor) -> None:
+        pass
+
     def forward(self, x):
         return x
 
     def get_inversion_modes(self):
         return None
 
-    @torch.jit.export
-    def scale_data(self, x: torch.Tensor) -> None:
-        pass
-
     def invert(self, x: torch.Tensor) -> torch.Tensor:
         return x
+
+    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
+        return self.forward(x), time
+    
+    def test_forward(self, x: torch.Tensor, time: torch.Tensor = None):
+        if time is None:
+            return self.forward(x)
+        else:
+            return self.forward_with_time(x, time)
 
     def test_inversion(self, x: torch.Tensor):
         if not self.invertible:
@@ -52,10 +62,10 @@ class AudioTransform(nn.Module):
         return {'inverted': x_inv}
 
     @classmethod
-    def test_scripted_transform(cls, transform):
+    def test_scripted_transform(cls, transform, invert=True):
         x = torch.zeros(2, 44100)
         x_t = transform(x)
-        if cls.invertible:
+        if invert:
             x_inv = transform.invert(x_t)
 
 
@@ -122,6 +132,12 @@ class ComposeAudioTransform(AudioTransform):
             x = t(x)
         return x
 
+    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
+        for t in self.transforms:
+            x, time = t.forward_with_time(x, time)
+        return x, time
+
+
     @torch.jit.export
     def invert(self, x, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4):
         for t in self.transforms[::-1]:
@@ -131,7 +147,7 @@ class ComposeAudioTransform(AudioTransform):
     def get_inversion_modes(self, idx):
         return type(self.transforms[idx]).get_inversion_modes()
 
-    def inversion_test(self, x: torch.Tensor):
+    def test_inversion(self, x: torch.Tensor):
         if not self.invertible:
             raise NotImplementedError
         x_transformed = x

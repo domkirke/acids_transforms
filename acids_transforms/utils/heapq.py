@@ -5,6 +5,7 @@ from typing import List, Tuple
 HeapItemType = Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
 HeapType = List[HeapItemType]
 
+
 def _siftdown(heap: HeapType, startpos: int, pos: int) -> None:
     newitem = heap[pos]
     # Follow the path to the root, moving parents down until finding a place
@@ -18,6 +19,7 @@ def _siftdown(heap: HeapType, startpos: int, pos: int) -> None:
             continue
         break
     heap[pos] = newitem
+
 
 def _siftup(heap: HeapType, pos: int) -> None:
     endpos = len(heap)
@@ -39,10 +41,12 @@ def _siftup(heap: HeapType, pos: int) -> None:
     heap[pos] = newitem
     _siftdown(heap, startpos, pos)
 
+
 def heappush(heap: HeapType, item: HeapItemType) -> None:
     """Push item onto heap, maintaining the heap invariant."""
     heap.append(item)
     _siftdown(heap, 0, len(heap)-1)
+
 
 def heappop(heap: HeapType) -> HeapItemType:
     """Pop the smallest item off the heap, maintaining the heap invariant."""

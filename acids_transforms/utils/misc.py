@@ -1,9 +1,13 @@
 from argparse import ArgumentError
-from typing import Tuple
+from typing import Tuple, List
 from . import heapq
-import torch, os, torchaudio, torch.nn as nn
+import torch
+import os
+import torchaudio
+import torch.nn as nn
 
 eps = torch.finfo(torch.get_default_dtype()).eps
+
 
 def unwrap(tensor: torch.Tensor):
     """
@@ -13,7 +17,7 @@ def unwrap(tensor: torch.Tensor):
     """
     unwrapped = tensor.clone()
     diff = tensor[..., 1:, :] - tensor[..., :-1, :]
-    ddmod = (diff + torch.pi)%(2 * torch.pi) - torch.pi
+    ddmod = (diff + torch.pi) % (2 * torch.pi) - torch.pi
     mask = (ddmod == -torch.pi).bitwise_and(diff > 0)
     ddmod[mask] = torch.pi
     ph_correct = ddmod - diff
@@ -32,7 +36,7 @@ def import_data(path: str, sr=44100):
         data = []
         names = []
         for f in os.listdir(path):
-            try: 
+            try:
                 current_x, n = import_data(f"{path}/{f}")
                 data.append(current_x)
                 names.append(os.path.splitext(os.path.basename(n))[0])
@@ -42,11 +46,12 @@ def import_data(path: str, sr=44100):
         stereo = 2 in [d.shape[0] for d in data]
         for i, d in enumerate(data):
             if d.shape[0] > 1:
-                d = d if stereo else d[0].unsqueeze(0) 
+                d = d if stereo else d[0].unsqueeze(0)
             else:
                 d = torch.cat([d, d]) if stereo else d
             if d.shape[1] <= max_size:
-                d = torch.cat([d, torch.zeros(d.shape[0], max_size - d.shape[1], dtype=d.dtype)], 1)
+                d = torch.cat(
+                    [d, torch.zeros(d.shape[0], max_size - d.shape[1], dtype=d.dtype)], 1)
             data[i] = d
         data = torch.stack(data)
         return data, names
@@ -55,8 +60,10 @@ def import_data(path: str, sr=44100):
 
 
 def fdiff_forward(x):
-    inst_f = torch.cat([x[..., 0, :].unsqueeze(-2), (x[..., 1:, :] - x[..., :-1, :])/2], dim=-2)
+    inst_f = torch.cat([x[..., 0, :].unsqueeze(-2),
+                        (x[..., 1:, :] - x[..., :-1, :])/2], dim=-2)
     return inst_f
+
 
 def fdiff_backward(x):
     x = x.flip(-2)
@@ -64,9 +71,12 @@ def fdiff_backward(x):
     inst_f = inst_f.flip(-2)
     return inst_f
 
+
 def fdiff_central(x):
-    inst_f = torch.cat([x[..., 0, :].unsqueeze(-2), (x[..., 2:, :] - x[..., :-2, :])/4, x[..., -1, :].unsqueeze(-2)], dim=-2)
+    inst_f = torch.cat([x[..., 0, :].unsqueeze(-2), (x[..., 2:, :] -
+                                                     x[..., :-2, :])/4, x[..., -1, :].unsqueeze(-2)], dim=-2)
     return inst_f
+
 
 def fint_forward(x):
     out = x
@@ -74,11 +84,13 @@ def fint_forward(x):
     out = torch.cumsum(out, -2)
     return out
 
+
 def fint_backward(x):
     out = x.flip(-2)
     out = fint_forward(out)
     out = out.flip(-2)
     return out
+
 
 def fint_central(x):
     out = torch.zeros_like(x)
@@ -89,25 +101,28 @@ def fint_central(x):
     for i in range(x.shape[-2]-1, 0, -2):
         out[..., i-2, :] = out[..., i, :] - 4 * x[..., i-1, :]
     return out
-        
 
-def deriv(mag: torch.Tensor, order: int=2) -> torch.Tensor:
+
+def deriv(mag: torch.Tensor, order: int = 2) -> torch.Tensor:
     """
     https://gitlab.lis-lab.fr/dev/ltfatpy/-/blob/master/ltfatpy/fourier/pderiv.py
     """
     assert order in [2, 4, float('inf')], "order must be 2, 4 or inf"
     L = mag.shape[0]
     if order == 2:
-        magd = L * (mag.roll(-1)  - mag.roll(1)) / 2
+        magd = L * (mag.roll(-1) - mag.roll(1)) / 2
     elif order == 4:
-        magd = L * (-mag.roll(-2) + 8*mag.roll(-1) - 8*mag.roll(1) + mag.roll(2)) / 12
+        magd = L * (-mag.roll(-2) + 8*mag.roll(-1) -
+                    8*mag.roll(1) + mag.roll(2)) / 12
     elif order == float('inf'):
         if L % 2 == 0:
             n = torch.cat([torch.arange(0, L//2+1), torch.arange(-L//2+1, 0)])
         else:
-            n = torch.cat([torch.arange(0, (L+1)//2), torch.arange(-(L-1)//2, 0)]) 
+            n = torch.cat([torch.arange(0, (L+1)//2),
+                           torch.arange(-(L-1)//2, 0)])
         n = torch.tile(n, (mag.shape[1], 1)).transpose()
-        magd = 2* torch.pi * torch.fft.ifft(1j*torch.fft.fft(mag, dim=0), dim=0)
+        magd = 2 * torch.pi * \
+            torch.fft.ifft(1j*torch.fft.fft(mag, dim=0), dim=0)
     return magd
 
 
@@ -115,27 +130,33 @@ def get_fft_idx(L):
     if L % 2 == 0:
         n = torch.cat([torch.arange(0, L//2+1), torch.arange(-L//2+1, 0)])
     else:
-        n = torch.cat([torch.arange(0, (L+1)//2), torch.arange(-(L-1)//2, 0)]) 
+        n = torch.cat([torch.arange(0, (L+1)//2), torch.arange(-(L-1)//2, 0)])
     return n
 
 
-def pad(tensor, target_size, dim):
+def pad(tensor: torch.Tensor, target_size: int, dim: int):
     if tensor.size(dim) > target_size:
         return tensor
-    cat_tensor = torch.zeros((*tensor.shape[:dim], target_size - tensor.shape[dim], *tensor.shape[dim+1:]), dtype=tensor.dtype, device=tensor.device)
+    tensor_size = list(tensor.shape)
+    tensor_size[dim] = target_size - tensor.shape[dim]
+    cat_tensor = torch.zeros(
+        tensor_size, dtype=tensor.dtype, device=tensor.device)
     return torch.cat([tensor, cat_tensor], dim=dim)
 
 
-def frame(tensor, wsize, hsize, dim):
+def frame(tensor: torch.Tensor, wsize: int, hsize: int, dim: int):
     if dim < 0:
         dim = tensor.ndim + dim
     if not tensor.is_contiguous():
         tensor = tensor.contiguous()
     n_windows = tensor.shape[dim] // hsize
     tensor = pad(tensor, n_windows * hsize + wsize,  dim)
-    shape = tuple(tensor.shape)
-    strides = tensor.stride()
-    shape = shape[:dim] + (n_windows, wsize) + shape[dim+1:]
-    strides = strides[:dim] + (hsize,) + strides[dim:]
-    #strides = list(strides[dim:], (strides[dim]*hsize) + [hsize * new_stride] + list(strides[dim+1:])
+    shape = list(tensor.shape)
+    shape[dim] = n_windows
+    shape.insert(dim+1, wsize)
+    # shape = shape[:dim] + (n_windows, wsize) + shape[dim+1:]
+    strides = [tensor.stride(i) for i in range(tensor.ndim)]
+    strides.insert(dim, hsize)
+    # strides = strides[:dim] + (hsize,) + strides[dim:]
+    # strides = list(strides[dim:], (strides[dim]*hsize) + [hsize * new_stride] + list(strides[dim+1:])
     return torch.as_strided(tensor, shape, strides)
