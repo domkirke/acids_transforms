@@ -9,7 +9,9 @@ from typing import Union, List
 class NotInvertibleError(Exception):
     pass
 
+
 InversionEnumType = Union[str, None]
+
 
 class AudioTransform(nn.Module):
     invertible = True
@@ -45,9 +47,9 @@ class AudioTransform(nn.Module):
     def invert(self, x: torch.Tensor) -> torch.Tensor:
         return x
 
-    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
+    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor):
         return self.forward(x), time
-    
+
     def test_forward(self, x: torch.Tensor, time: torch.Tensor = None):
         if time is None:
             return self.forward(x)
@@ -132,11 +134,10 @@ class ComposeAudioTransform(AudioTransform):
             x = t(x)
         return x
 
-    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
+    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor):
         for t in self.transforms:
             x, time = t.forward_with_time(x, time)
         return x, time
-
 
     @torch.jit.export
     def invert(self, x, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4):

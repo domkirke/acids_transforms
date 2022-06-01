@@ -7,13 +7,9 @@ from .base import AudioTransform
 from ..utils.misc import frame
 
 
-__all__ = ["NormalizeMode", "Normalize"]
+__all__ = ["Normalize"]
 
-
-class NormalizeMode(enum.Enum):
-    UNIPOLAR = 1
-    BIPOLAR = 2
-    GAUSSIAN = 3
+MagnitudeModeType = Union[None, str]
 
 
 class Normalize(AudioTransform):
@@ -21,13 +17,10 @@ class Normalize(AudioTransform):
     scriptable = True
 
     def __repr__(self):
-        return f"Normalize(mode={self.mode.name})"
+        return f"Normalize(mode={self.mode})"
 
-    def __init__(self, mode: Union[NormalizeMode, str] = NormalizeMode.GAUSSIAN):
+    def __init__(self, mode: MagnitudeModeType = "gaussian"):
         super().__init__()
-        if isinstance(mode, str):
-            mode = NormalizeMode(mode)
-        assert mode in NormalizeMode
         self.mode = mode
         self.needs_scaling = True
         self.register_buffer("offset", torch.zeros(0), persistent=False)
@@ -35,15 +28,15 @@ class Normalize(AudioTransform):
 
     @torch.jit.export
     def scale_data(self, x: torch.Tensor) -> None:
-        if self.mode == NormalizeMode.UNIPOLAR:
+        if self.mode == "unipolar":
             self.offset = x.min()
             self.scale = (x - x.min()).max()
-        elif self.mode == NormalizeMode.BIPOLAR:
+        elif self.mode == "bipolar":
             x_min = x.min()
             x_max = x.max()
             self.offset = (x_max + x_min) / 2
             self.scale = x_max - self.offset
-        elif self.mode == NormalizeMode.GAUSSIAN:
+        elif self.mode == "gaussian":
             self.offset = x.mean()
             self.scale = x.std()
         self.needs_scaling = False
@@ -54,28 +47,31 @@ class Normalize(AudioTransform):
     def invert(self, x: torch.Tensor) -> torch.Tensor:
         return x * self.scale + self.offset
 
+    def get_normalization_modes(self):
+        return ['unipolar', 'bipolar', 'gaussian']
+
     def test_forward(self, x: torch.Tensor, time: torch.Tensor = None):
         x = frame(x, min(256, x.shape[-1]), min(64, x.shape[-1]), -1)
         x_min = x.min()
         x_max = x.max()
         # test normal mode
         tolerance = torch.finfo(x.dtype).eps
-        for norm_mode in NormalizeMode:
+        for norm_mode in self.get_normalization_modes():
             self.mode = norm_mode
             self.scale_data(x)
             x_norm = self(x)
-            if norm_mode == NormalizeMode.UNIPOLAR:
+            if norm_mode == "unipolar":
                 assert x_norm.min() == 0.
                 assert x_norm.max() == 1.
-            elif norm_mode == NormalizeMode.BIPOLAR:
+            elif norm_mode == "bipolar":
                 assert x_norm.min() == -1.
                 assert x_norm.max() == 1.
-            elif norm_mode == NormalizeMode.GAUSSIAN:
+            elif norm_mode == "gaussian":
                 assert (x_norm.mean() < tolerance).item()
                 assert ((x_norm.std() - 1).pow(2) < tolerance).item()
             else:
                 raise ValueError(
-                    "test for norm type %s not implemented" % norm_mode) 
+                    "test for norm type %s not implemented" % norm_mode)
         if time is None:
             return x_norm
         else:
@@ -88,7 +84,7 @@ class Normalize(AudioTransform):
         if tolerance is None:
             tolerance = torch.finfo(x.dtype).eps
         # test normal mode
-        for norm_mode in NormalizeMode:
+        for norm_mode in self.get_normalization_modes():
             self.mode = norm_mode
             self.scale_data(x)
             x_norm = self(x)

@@ -26,7 +26,7 @@ class STFT(AudioTransform):
         return False
 
     def __repr__(self):
-        repr_str = f"STFT(n_fft={self.n_fft}, hop_length={self.hop_length}" \
+        repr_str = f"STFT(n_fft={self.n_fft.item()}, hop_length={self.hop_length.item()}" \
                    f"inversion_mode = {self.inversion_mode})"
         return repr_str
 
@@ -163,8 +163,9 @@ class STFT(AudioTransform):
 
 class RealtimeSTFT(STFT):
 
-    def __init__(self, sr: int = 44100, n_fft: int = 1024, hop_length: int = 256, dtype: torch.dtype = None, inversion_mode: InversionEnumType = "random", window: str = "hann"):
+    def __init__(self, sr: int = 44100, n_fft: int = 1024, hop_length: int = 256, dtype: torch.dtype = None, inversion_mode: InversionEnumType = "random", window: str = "hann", batch_size: int = 2):
         super().__init__(sr=sr, n_fft=n_fft, hop_length=hop_length, dtype=dtype, inversion_mode=inversion_mode, window=window)
+        self.batch_size = batch_size
 
     @property
     def scriptable(self):
@@ -202,6 +203,14 @@ class RealtimeSTFT(STFT):
         else:
             inv_window = self.inv_window[:self.n_fft.item()]
             return torch.fft.irfft(x) * inv_window.unsqueeze(0)
+
+    @torch.jit.export
+    def get_batch_size(self, batch_size: int):
+        return batch_size
+
+    @torch.jit.export
+    def set_batch_size(self, batch_size: int):
+        self.batch_size = batch_size
 
     def invert_without_phase(self, x: torch.Tensor, tolerance: float, inversion_mode: InversionEnumType = None) -> torch.Tensor:
         window = self.inv_window[:self.n_fft.item()]

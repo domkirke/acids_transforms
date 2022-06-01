@@ -23,11 +23,9 @@ class DGT_INVERSION_MODES(Enum):
 
 
 class DGT(STFT):
-    invertible = True
-    scriptable = True
 
     def __repr__(self):
-        repr_str = f"DGT(n_fft={self.n_fft}, hop_length={self.hop_length}" \
+        repr_str = f"DGT(n_fft={self.n_fft.item()}, hop_length={self.hop_length.item()}" \
                    f"inversion_mode = {self.inversion_mode})"
         return repr_str
 
@@ -80,7 +78,7 @@ class DGT(STFT):
         self.gamma = self._get_gamma()
 
     def _get_gamma(self) -> torch.Tensor:
-        return torch.tensor(2*torch.pi*((-self.n_fft**2/(8*math.log(0.01)))**.5)**2)
+        return 2*torch.pi*((-self.n_fft**2/(8*math.log(0.01)))**.5)**2
 
     def _get_window(self) -> torch.FloatTensor:
         lambda_ = (-self.n_fft**2/(8*math.log(0.01)))**.5
@@ -218,15 +216,16 @@ class RTDGT_INVERSION_MODES(Enum):
 
 
 class RealtimeDGT(DGT):
-    def __init__(self, sr: int = 44100, n_fft=1024, hop_length=256, dtype=None, batch_size=2, inversion_mode: InversionEnumType = "pghi"):
+    def __init__(self, sr: int = 44100, n_fft=1024, hop_length=256, dtype=None, batch_size: int = 2, inversion_mode: InversionEnumType = "pghi"):
         super().__init__(sr=sr, n_fft=n_fft, hop_length=hop_length, dtype=dtype, inversion_mode=inversion_mode)
+        self.batch_size = batch_size
         self.register_buffer(
             'hgi_mag_buffer', torch.zeros(batch_size, 2, n_fft//2+1))
         self.register_buffer("hgi_phase_buffer",
                              torch.zeros(batch_size, n_fft//2+1))
 
     def __repr__(self):
-        repr_str = f"RealtimeDGT(n_fft={self.n_fft}, hop_length={self.hop_length}" \
+        repr_str = f"RealtimeDGT(n_fft={self.n_fft.item()}, hop_length={self.hop_length.item()}" \
                    f"inversion_mode = {self.inversion_mode})"
         return repr_str
 
@@ -235,13 +234,26 @@ class RealtimeDGT(DGT):
         return ['random', 'pghi', 'keep_input']
 
     @torch.jit.export
+    def get_batch_size(self, batch_size: int):
+        return batch_size
+
+    @torch.jit.export
+    def set_batch_size(self, batch_size: int):
+        self.reset(batch_size)
+        self.batch_size = batch_size
+
+    @torch.jit.export
     def batch_size(self) -> Union[None, int]:
         return int(self.hgi_mag_buffer.size(0))
 
     @torch.jit.export
-    def reset(self) -> None:
-        self.hgi_mag_buffer.zero_()
-        self.hgi_phase_buffer.zero_()
+    def reset(self, batch_size: int) -> None:
+        if batch_size == self.batch_size:
+            self.hgi_mag_buffer.zero_()
+            self.hgi_phase_buffer.zero_()
+        else:
+            self.hgi_mag_buffer = torch.zeros(batch_size, 2, self.n_fft//2+1)
+            self.hgi_phase_buffer = torch.zeros(batch_size, self.n_fft//2+1)
 
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -392,6 +404,7 @@ class RealtimeDGT(DGT):
 
     # Tests
     def test_inversion(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        self.reset(x.shape[0])
         n_fft = self.n_fft.item()
         hop_length = self.hop_length.item()
         x_framed = frame(x, n_fft, hop_length, -1)

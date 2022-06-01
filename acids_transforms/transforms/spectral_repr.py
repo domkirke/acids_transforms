@@ -3,12 +3,12 @@ from enum import Enum
 from .base import AudioTransform, InversionEnumType
 from ..utils.misc import *
 from .stft import STFT
-from .norm import Normalize, NormalizeMode
+from .norm import Normalize
 from typing import Union, Tuple
 import torch
 import torch.nn as nn
 
-__all__ = ["Real", "Imaginary", "Magnitude", "IFMethods",
+__all__ = ["Real", "Imaginary", "Magnitude", 
            "Phase", "IF", "Cartesian", "Polar", "PolarIF"]
 
 
@@ -18,7 +18,7 @@ class Dummy(AudioTransform):
 
 class _Representation(AudioTransform):
 
-    def __init__(self, sr: int = 44100, mode: Union[NormalizeMode, None] = NormalizeMode.UNIPOLAR):
+    def __init__(self, sr: int = 44100, mode: Union[str, None] = "unipolar"):
         super().__init__(sr=sr)
         if mode is not None:
             self.norm = Normalize(mode)
@@ -35,7 +35,7 @@ class _Representation(AudioTransform):
 
     @property
     def needs_scaling(self):
-        return True 
+        return True
 
     @torch.jit.export
     def scale_data(self, x: torch.Tensor) -> None:
@@ -122,10 +122,7 @@ class Imaginary(_Representation):
         return {'direct': x_inv}
 
 
-class ContrastMode(Enum):
-    NONE = 0
-    LOG = 1
-    LOG1P = 2
+ContrastModeType = Union[None, str]
 
 
 class Magnitude(_Representation):
@@ -138,8 +135,8 @@ class Magnitude(_Representation):
 
     def __init__(self,
                  sr: int = 44100,
-                 mode: Union[NormalizeMode, None] = NormalizeMode.UNIPOLAR,
-                 contrast: ContrastMode = ContrastMode.LOG1P,
+                 mode: Union[str, None] = "unipolar",
+                 contrast: ContrastModeType = "log1p",
                  mel: bool = True,
                  n_fft: int = 1024,
                  dtype: torch.dtype = None,
@@ -175,21 +172,25 @@ class Magnitude(_Representation):
                 "inverse_mel_bank", mel_bank_inv_norm.transpose(-2, -1).unsqueeze(0))
 
     def contrast(self, mag: torch.Tensor) -> torch.Tensor:
-        if self.contrast_mode == ContrastMode.LOG1P:
+        if self.contrast_mode == "log1p":
             return torch.log(1 + mag)
-        elif self.contrast_mode == ContrastMode.LOG:
+        elif self.contrast_mode == "log":
             return torch.log(torch.clamp(mag, self.eps, None))
-        elif self.contrast_mode == ContrastMode.NONE:
+        elif self.contrast_mode == "log10":
+            return torch.log10(torch.clamp(mag, self.eps, None))
+        elif (self.contrast_mode is None) or (self.contrast_mode == "none"):
             return mag
         else:
             raise TypeError("unknown contrast type %s" % self.contrast_mode)
 
     def invert_contrast(self, mag: torch.Tensor) -> torch.Tensor:
-        if self.contrast_mode == ContrastMode.LOG1P:
+        if self.contrast_mode == "log1p":
             return torch.exp(mag) - 1
-        elif self.contrast_mode == ContrastMode.LOG:
+        elif self.contrast_mode == "log":
             return torch.exp(mag) - self.eps
-        elif self.contrast_mode == ContrastMode.NONE:
+        elif self.contrast_mode == "log10":
+            return torch.tensor(10).pow(mag)
+        elif (self.contrast_mode is None) or (self.contrast_mode == "none"):
             return mag
         else:
             raise TypeError("unknown contrast type %s" % self.contrast_mode)
@@ -260,18 +261,13 @@ class Phase(_Representation):
         return {'direct': x_inv}
 
 
-class IFMethods(Enum):
-    FORWARD = 1
-    BACKWARD = 2
-    CENTRAL = 3
-
 
 class IF(_Representation):
 
     def __repr__(self):
         return "IF(method=%s, norm=%s)" % (self.method, self.norm.mode)
 
-    def __init__(self, sr: int = 44100, mode: Union[NormalizeMode, None] = NormalizeMode.GAUSSIAN, method=IFMethods.FORWARD, weighted=False):
+    def __init__(self, sr: int = 44100, mode: Union[str, None] = "gaussian", method: Union[str, None] = "forward", weighted=False):
         super().__init__(sr=sr, mode=mode)
         self.method = method
         self.weighted = weighted
@@ -279,16 +275,18 @@ class IF(_Representation):
         self.register_buffer("eps", torch.tensor(
             torch.finfo(torch.float32).eps))
 
-    def get_if(self, data: torch.Tensor):
+    def get_if_methods(self):
+        return ["backward", "forward", "central"]
 
+    def get_if(self, data: torch.Tensor):
         phase = unwrap(data.angle())
-        if self.method == IFMethods.BACKWARD:
+        if self.method == "backward":
             inst_f = fdiff_backward(phase)
             inst_f[1:] /= (-torch.pi)
-        elif self.method == IFMethods.FORWARD:
+        elif self.method == "forward":
             inst_f = fdiff_forward(phase)
             inst_f[:-1] /= (torch.pi)
-        elif self.method == IFMethods.CENTRAL:
+        elif self.method == "central":
             inst_f = fdiff_central(phase)
             inst_f[1:-1] /= (2 * torch.pi)
         else:
@@ -320,158 +318,157 @@ class IF(_Representation):
     @torch.jit.export
     def invert(self, x, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
         x_denorm = self.norm.invert(x)
-        if self.method == IFMethods.BACKWARD:
+        if self.method == "backward":
             x_denorm[1:] *= -torch.pi
             x_denorm = fint_backward(x_denorm)
-        if (self.method == IFMethods.FORWARD):
+        if self.method == "forward":
             x_denorm[:-1] *= torch.pi
-            x_denorm = fint_forward(x_denorm)
-        elif self.method == IFMethods.CENTRAL:
+            x_denorm=fint_forward(x_denorm)
+        elif self.method == "central":
             x_denorm[1:-1] *= torch.pi
-            x_denorm = fint_central(x_denorm)
+            x_denorm=fint_central(x_denorm)
         return x_denorm
 
     def test_inversion(self, x: torch.Tensor):
         # simulate STFT
-        x = torch.stft(x, 1024, 256, return_complex=True).transpose(-2, -1)
-        mag = x.abs()
+        x=torch.stft(x, 1024, 256, return_complex=True).transpose(-2, -1)
+        mag=x.abs()
         self.scale_data(x)
-        x_angle = self(x)
-        x_angle_inv = self.invert(x_angle)
-        x_inv_fft = mag * torch.exp(x_angle_inv * 1j)
-        x_inv = torch.istft(x_inv_fft.transpose(-2, -1), 1024, 256)
+        x_angle=self(x)
+        x_angle_inv=self.invert(x_angle)
+        x_inv_fft=mag * torch.exp(x_angle_inv * 1j)
+        x_inv=torch.istft(x_inv_fft.transpose(-2, -1), 1024, 256)
         return {'direct': x_inv}
 
 
-SpectralRepresentationType = Union[torch.Tensor,
+SpectralRepresentationType=Union[torch.Tensor,
                                    Tuple[torch.Tensor, torch.Tensor]]
 
 
 class SpectralRepresentation(AudioTransform):
 
-    @property
+    @ property
     def scriptable(self):
         return True
 
-    @property
+    @ property
     def invertible(self):
         return True
 
-    @property
+    @ property
     def needs_scaling(self):
         return True
 
-    def __init__(self, sr: int = 44100,
+    def __init__(self, sr: int=44100,
                  magnitude_transform=None, phase_transform=None,
-                 magnitude_mode=NormalizeMode.UNIPOLAR, phase_mode=NormalizeMode.GAUSSIAN, stack=-2):
+                 magnitude_mode="unipolar", phase_mode="gaussian", stack=-2):
         super().__init__(sr=sr)
         if type(self) == SpectralRepresentation:
             raise RuntimeError(
                 "SpectralRepresentation should not be called directly.")
-        self.magnitude = magnitude_transform(sr=sr, mode=magnitude_mode)
-        self.phase = phase_transform(sr=sr, mode=phase_mode)
-        self.stack = stack
+        self.magnitude=magnitude_transform(sr=sr, mode=magnitude_mode)
+        self.phase=phase_transform(sr=sr, mode=phase_mode)
+        self.stack=stack
 
-    @torch.jit.export
+    @ torch.jit.export
     def scale_data(self, x: torch.Tensor) -> None:
         self.magnitude.scale_data(x)
         self.phase.scale_data(x)
 
-    @torch.jit.export
+    @ torch.jit.export
     def forward(self, x: torch.Tensor) -> SpectralRepresentationType:
-        magnitude = self.magnitude(x)
-        phase = self.phase(x)
+        magnitude=self.magnitude(x)
+        phase=self.phase(x)
         if self.stack is not None:
             return torch.stack([magnitude, phase], dim=self.stack)
         else:
             return (magnitude, phase)
 
-    @torch.jit.export
-    def invert(self, x, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
+    @ torch.jit.export
+    def invert(self, x, inversion_mode: InversionEnumType=None, tolerance: float=1.e-4) -> torch.Tensor:
         if self.stack is None:
-            mag = x[0]
-            phase = x[1]
+            mag=x[0]
+            phase=x[1]
         else:
-            mag = x.index_select(
+            mag=x.index_select(
                 self.stack, torch.tensor(0)).squeeze(self.stack)
-            phase = x.index_select(
+            phase=x.index_select(
                 self.stack, torch.tensor(1)).squeeze(self.stack)
-        mag = self.magnitude.invert(mag)
-        phase = self.phase.invert(phase)
+        mag=self.magnitude.invert(mag)
+        phase=self.phase.invert(phase)
         return mag * torch.exp(phase * torch.full(phase.shape, 1j, device=phase.device))
 
-
-    def test_forward(self, x: torch.Tensor, time: torch.Tensor = None):
-        stft_transform = STFT()
+    def test_forward(self, x: torch.Tensor, time: torch.Tensor=None):
+        stft_transform=STFT()
         if time is None:
-            x_fft = stft_transform(x)
+            x_fft=stft_transform(x)
             self.scale_data(x_fft)
             return self(x_fft)
         else:
-            x_fft, time = stft_transform.forward_with_time(x, time)
+            x_fft, time=stft_transform.forward_with_time(x, time)
             self.scale_data(x_fft)
             return self.forward_with_time(x_fft, time)
 
     def test_inversion(self, x: torch.Tensor):
         # simulate STFT
-        x = torch.stft(x, 1024, 256, return_complex=True).transpose(-1, -2)
+        x=torch.stft(x, 1024, 256, return_complex=True).transpose(-1, -2)
         self.scale_data(x)
-        x_t = self(x)
-        x_t_inv = self.invert(x_t)
-        x_inv = torch.istft(x_t_inv.transpose(-1, -2), 1024, 256)
+        x_t=self(x)
+        x_t_inv=self.invert(x_t)
+        x_inv=torch.istft(x_t_inv.transpose(-1, -2), 1024, 256)
         return {'direct': x_inv}
 
-    @classmethod
-    def test_scripted_transform(cls, transform, invert:bool=True):
-        complex_random = torch.randn(
+    @ classmethod
+    def test_scripted_transform(cls, transform, invert: bool=True):
+        complex_random=torch.randn(
             2, 10, 513) * torch.exp(2 * torch.pi * torch.rand(2, 10, 513) * torch.full((2, 10, 513), 1j))
         transform.scale_data(complex_random)
-        x_repr = transform(complex_random)
+        x_repr=transform(complex_random)
         if invert:
-            x_inv = transform.invert(x_repr)
+            x_inv=transform.invert(x_repr)
 
 
 class Cartesian(SpectralRepresentation):
-    realtime = True
+    realtime=True
 
     def __repr__(self):
         return "Cartesian(real_norm=%s, imag_norm=%s)" % (self.magnitude.norm.mode, self.phase.norm.mode)
 
-    def __init__(self, sr:int = 44100, real_mode=NormalizeMode.GAUSSIAN, imag_mode=NormalizeMode.GAUSSIAN, stack=-2):
+    def __init__(self, sr: int=44100, real_mode="gaussian", imag_mode="gaussian", stack=-2):
         super(Cartesian, self).__init__(sr, Real, Imaginary,
                                         real_mode, imag_mode, stack=stack)
 
 
 class Polar(SpectralRepresentation):
-    realtime = True
+    realtime=True
 
     def __repr__(self):
         return "Polar(real_norm=%s, imag_norm=%s)" % (self.magnitude.norm.mode, self.phase.norm.mode)
 
-    def __init__(self, sr: int = 44100, magnitude_mode=NormalizeMode.UNIPOLAR, phase_mode=NormalizeMode.GAUSSIAN, stack=-2):
+    def __init__(self, sr: int=44100, magnitude_mode="unipolar", phase_mode="gaussian", stack=-2):
         super(Polar, self).__init__(sr, Magnitude, Phase,
                                     magnitude_mode, phase_mode, stack=stack)
 
 
 class PolarIF(SpectralRepresentation):
-    realtime = True
+    realtime=True
 
     def __repr__(self):
         return "PolarIF(real_norm=%s, imag_norm=%s)" % (self.magnitude.norm.mode, self.phase.norm.mode)
 
-    def __init__(self, sr: int = 44100, magnitude_mode=NormalizeMode.UNIPOLAR, phase_mode=NormalizeMode.GAUSSIAN, stack=-2):
+    def __init__(self, sr: int=44100, magnitude_mode="unipolar", phase_mode="gaussian", stack=-2):
         super(PolarIF, self).__init__(sr, Magnitude, IF,
                                       magnitude_mode, phase_mode, stack=stack)
 
     def test_inversion(self, x: torch.Tensor):
         # simulate STFT
-        x = torch.stft(x, 1024, 256, return_complex=True).transpose(-1, -2)
-        outs = {}
-        for method in IFMethods:
-            self.phase.method = method
+        x=torch.stft(x, 1024, 256, return_complex=True).transpose(-1, -2)
+        outs={}
+        for method in self.phase.get_if_methods():
+            self.phase.method=method
             self.scale_data(x)
-            x_t = self(x)
-            x_t_inv = self.invert(x_t)
-            x_inv = torch.istft(x_t_inv.transpose(-1, -2), 1024, 256)
-            outs[method] = x_inv
+            x_t=self(x)
+            x_t_inv=self.invert(x_t)
+            x_inv=torch.istft(x_t_inv.transpose(-1, -2), 1024, 256)
+            outs[method]=x_inv
         return outs
