@@ -11,7 +11,8 @@ Available transforms:
 MuLaw | yes | yes
 Window | yes | yes
 Mono | yes | yes
-Stereo
+Stereo | yes | yes
+OneHot | yes | yes
 **spectral**
 STFT / RealtimeSTFT  | yes | yes
 DGT / RealtimeDGT | yes | yes
@@ -22,6 +23,10 @@ Magnitude / Phase | yes | yes
 Instantaneous Frequency | yes | yes
 **normalization**
 Normalize | yes | yes
+**miscalleneous**
+Squeeze | yes | yes
+Unsqueeze | yes | yes
+Transpose | yes | yes
 
 
 ## Installation
