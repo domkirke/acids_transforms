@@ -5,3 +5,4 @@ from .dgt import *
 from .norm import *
 from .spectral_repr import *
 from .mel import *
+from .misc import *

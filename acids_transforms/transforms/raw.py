@@ -1,4 +1,3 @@
-from re import I
 import torch
 import torchaudio
 from .base import AudioTransform, InversionEnumType

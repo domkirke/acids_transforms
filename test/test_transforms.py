@@ -66,7 +66,7 @@ def test_scriptable(transform_type):
 combinations = {
     "stft+magnitude": transforms.STFT() + transforms.Magnitude(),
     # "scaled+dgt": 10.0 * transforms.DGT(),
-    "stereo+mulaw": transforms.Stereo() + transforms.MuLaw(),
+    "stereo+mulaw+onehot": transforms.Stereo() + transforms.MuLaw(channels=256) + transforms.OneHot(n_classes=256),
     "stft+polar": transforms.STFT() + transforms.Polar()
 }
 

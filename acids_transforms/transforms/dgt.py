@@ -1,6 +1,5 @@
 import torch
 import math
-import torch.nn as nn
 from enum import Enum
 from .stft import STFT
 from .base import AudioTransform, InversionEnumType

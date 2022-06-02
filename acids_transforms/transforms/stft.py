@@ -1,9 +1,8 @@
 import torch
 from torchaudio.functional import griffinlim
 import math
-from enum import Enum
 from .base import AudioTransform, InversionEnumType
-from typing import Dict, Union
+from typing import Dict
 from ..utils.misc import *
 
 __all__ = ['STFT', 'RealtimeSTFT']
