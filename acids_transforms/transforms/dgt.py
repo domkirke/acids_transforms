@@ -59,16 +59,21 @@ class DGT(STFT):
         self._replace_phase_buffer(x_dgt.angle())
         return x_dgt.reshape(batch_shape + x_dgt.shape[-2:])
 
+    @torch.jit.export
     def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
         transform = self.forward(x)
         n_chunks = transform.size(-2)
         shifts = torch.arange(n_chunks) * self.hop_length / self.sr
-        shifts = shifts.as_strided((*transform.shape[:-2], n_chunks), (*((0,)*(x.ndim-1)), 1))
+        new_shape = [t for t in transform.shape[:-2]]
+        new_shape.append(n_chunks)
+        new_strides = [0] * (x.ndim-1)
+        new_strides.append(1)
+        shifts = shifts.as_strided(new_shape, new_strides)
         new_time = shifts + time.unsqueeze(-1)
         return transform, new_time
 
     @torch.jit.export
-    def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
+    def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-2) -> torch.Tensor:
         x, batch_shape = reshape_batches(x, -2)
         if not torch.is_complex(x):
             x_inv = self.invert_without_phase(x, inversion_mode, tolerance)
@@ -107,7 +112,7 @@ class DGT(STFT):
             gsynth[l] = self.window[l]/denom
         return gsynth
 
-    def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
+    def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-2) -> torch.Tensor:
         window = self.inv_window[:self.n_fft.item()]
         phase = torch.tensor(0)
         if inversion_mode is None:
@@ -133,7 +138,7 @@ class DGT(STFT):
                                              1j, device=phase.device))
         return torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), window=window, onesided=True)
 
-    def pghi(self, mag: torch.Tensor, tolerance: float = 1e-6) -> torch.Tensor:
+    def pghi(self, mag: torch.Tensor, tolerance: float = 1.e-4) -> torch.Tensor:
         mag = torch.clamp(mag.clone(), self.eps, None)
         # get derivatives
         tgradw, fgradw = self.modgabphasegrad(mag)
@@ -145,7 +150,7 @@ class DGT(STFT):
     def get_inversion_modes():
         return ["pghi", "griffin_lim", "random", "keep_input"]
     
-    def perform_hgi(self, X: torch.Tensor, tgradw: torch.Tensor, fgradw: torch.Tensor, abstol: float = 1e-7, tol: float = 1e-6) -> torch.Tensor:
+    def perform_hgi(self, X: torch.Tensor, tgradw: torch.Tensor, fgradw: torch.Tensor, abstol: float = 1e-7, tol: float = 1.e-2) -> torch.Tensor:
         spectrogram = X
         phase = torch.zeros_like(spectrogram)
         M2 = spectrogram.shape[0]
@@ -271,11 +276,12 @@ class RealtimeDGT(DGT):
         self._replace_phase_buffer(x_dgt.angle())
         return x_dgt
 
+    @torch.jit.export
     def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
-        return AudioTransform.forward_with_time(self, x, time)
+        return self(x), time
 
     @torch.jit.export
-    def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = "pghi", tolerance: float = 1.e-6) -> torch.Tensor:
+    def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = "pghi", tolerance: float = 1.e-2) -> torch.Tensor:
         if not torch.is_complex(x):
             x_rec = self.invert_without_phase(x, inversion_mode, tolerance)
             return x_rec
@@ -283,7 +289,7 @@ class RealtimeDGT(DGT):
             inv_window = self.inv_window[:self.n_fft.item()]
             return torch.fft.irfft(x) * inv_window.unsqueeze(0)
 
-    def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = "pghi", tolerance: float = 1.e-4) -> torch.Tensor:
+    def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = "pghi", tolerance: float = 1.e-2) -> torch.Tensor:
         window = self.inv_window[:self.n_fft.item()]
         phase = torch.tensor(0)
         if inversion_mode is None:
@@ -347,7 +353,7 @@ class RealtimeDGT(DGT):
         tgradw = -fmul*dxdt + torch.pi
         return (tgradw[:, 1:-1], fgradw[:, 1:, :])
 
-    def perform_hgi(self, spectrogram: torch.Tensor, previous_phase: torch.Tensor, tgradw: torch.Tensor, fgradw: torch.Tensor,  tol: float = 0.000001):
+    def perform_hgi(self, spectrogram: torch.Tensor, previous_phase: torch.Tensor, tgradw: torch.Tensor, fgradw: torch.Tensor,  tol: float = 1.e-2):
         abstol = torch.clamp(tol * spectrogram.max(), self.eps, None)
         # Random init phase when X < abstol
         new_phase = torch.where(spectrogram[-1] > abstol, torch.zeros_like(
@@ -412,8 +418,7 @@ class RealtimeDGT(DGT):
         if time is None:
             return transform
         else:
-            shifts = torch.arange(x.size(-2)) * self.hop_length.item() / self.sr
-            return transform, time + shifts
+            return transform, None
 
     # Tests
     def test_inversion(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -424,11 +429,17 @@ class RealtimeDGT(DGT):
         x_inv_shape = x_framed.size(-2) * hop_length + n_fft
         outs = {k: torch.zeros(*x.shape[:-1], x_inv_shape, device=x.device) for k in [
             'direct'] + self.get_inversion_modes()}
+        outs['direct'] = torch.zeros(*x.shape[:-1], x_inv_shape, device=x.device)
         for n in range(x_framed.size(-2)):
             x_stft = self.forward(x_framed[..., n, :])
             outs['direct'][..., n*hop_length:n *
                            hop_length+n_fft] += self.invert(x_stft)
-            for inv_type in self.get_inversion_modes():
+        for inv_type in self.get_inversion_modes():
+            self.inversion_mode = inv_type
+            self.reset(x.shape[:-1])
+            outs[inv_type] = torch.zeros(*x.shape[:-1], x_inv_shape, device=x.device)
+            for n in range(x_framed.size(-2)):
+                x_stft = self.forward(x_framed[..., n, :])
                 outs[inv_type][..., n*hop_length:n*hop_length +
                                n_fft] += self.invert(x_stft.abs(), inversion_mode=inv_type)
         return outs

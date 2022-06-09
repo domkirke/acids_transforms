@@ -20,8 +20,8 @@ class Normalize(AudioTransform):
         super().__init__()
         self.mode = mode
         self.needs_scaling = True
-        self.register_buffer("offset", torch.zeros(0), persistent=False)
-        self.register_buffer("scale", torch.ones(1), persistent=False)
+        self.register_buffer("offset", torch.zeros(0))
+        self.register_buffer("scale", torch.ones(1))
 
     @torch.jit.export
     def scale_data(self, x: torch.Tensor) -> None:

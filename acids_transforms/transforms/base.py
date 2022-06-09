@@ -35,15 +35,18 @@ class AudioTransform(nn.Module):
     def scale_data(self, x: torch.Tensor) -> None:
         pass
 
+    @torch.jit.export
     def forward(self, x):
         return x
 
     def get_inversion_modes(self):
         return None
 
+    @torch.jit.export
     def invert(self, x: torch.Tensor) -> torch.Tensor:
         return x
 
+    @torch.jit.export
     def forward_with_time(self, x: torch.Tensor, time: torch.Tensor):
         return self.forward(x), time
 
@@ -61,9 +64,11 @@ class AudioTransform(nn.Module):
         return {'inverted': x_inv}
 
     @classmethod
-    def test_scripted_transform(cls, transform, invert=True):
-        x = torch.zeros(2, 44100)
-        x_t = transform(x)
+    def test_scripted_transform(cls, transform, batch_size=(2,2), invert=True):
+        x = torch.zeros(*batch_size, 44100)
+        time = torch.zeros(*batch_size)
+        x_t = transform.forward(x)
+        x_t, time_t = transform.forward_with_time(x, time)
         if invert:
             x_inv = transform.invert(x_t)
 
@@ -131,6 +136,7 @@ class ComposeAudioTransform(AudioTransform):
             x = t(x)
         return x
 
+    @torch.jit.export
     def forward_with_time(self, x: torch.Tensor, time: torch.Tensor):
         for t in self.transforms:
             x, time = t.forward_with_time(x, time)

@@ -79,14 +79,16 @@ def test_combinations(test_files, transform):
     transform = combinations[transform]
     if transform.scriptable:
         transform = torch.jit.script(transform)
-    for i in range(raw.size(0)):
-        if transform.needs_scaling:
-            transform.scale_data(raw[i])
-        x_t = transform.forward(raw[i])
-        if transform.invertible:
-            x_inv = transform.invert(x_t)
-            if x_inv.ndim == 1:
-                x_inv = x_inv.unsqueeze(0)
-            torchaudio.save(
-                f"test/reconstructions/{names[i]}_{transform_name}.wav", x_inv, sample_rate=44100)
+    if transform.needs_scaling:
+        transform.scale_data(raw)
+    time = torch.zeros(*raw.shape[:-1])
+    x_t, time = transform.forward_with_time(raw, time)
+    if transform.invertible:
+        x_inv = transform.invert(x_t)
+    for i in range(x_inv.shape[0]):
+        x_tmp = x_inv[i]
+        if x_tmp.ndim == 1:
+            x_tmp = x_tmp.unsqueeze(0)
+        torchaudio.save(
+            f"test/reconstructions/{names[i]}_{transform_name}.wav", x_tmp, sample_rate=44100)
     return True
