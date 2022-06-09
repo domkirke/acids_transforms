@@ -9,7 +9,7 @@ with open("requirements.txt", "r") as requirements:
 
 setuptools.setup(
     name="acids_transforms",
-    version="0.1.1",
+    version="0.1.2",
     author="Axel CHEMLA--ROMEU-SANTOS",
     author_email="chemla@ircam.fr",
     description="A bunch of scriptable audio transforms based on the torchaudio backend",
