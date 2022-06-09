@@ -217,8 +217,8 @@ class Magnitude(_Representation):
         mag = self.norm.invert(x)
         mag = self.invert_contrast(mag)
         if self.mel:
-            mag = torch.matmul(mag, self.inverse_mel_bank)[0]
-            if mag.ndim <= 2:
+            mag = torch.matmul(mag, self.inverse_mel_bank)
+            if x.ndim <= 2:
                 mag = mag[0]
         return mag
 
