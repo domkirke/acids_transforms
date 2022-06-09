@@ -48,6 +48,7 @@ class Mono(AudioTransform):
             x = x.squeeze(-2)
         return x
 
+    @torch.jit.export
     def forward_with_time(self, x: torch.Tensor, time: torch.Tensor):
         if self.squeeze:
             time = time[..., 0]
@@ -125,8 +126,9 @@ class Window(AudioTransform):
     def needs_scaling(self):
         return False
 
-    def __init__(self, window_size: int = 1024, hop_size: int = 256, dim: int = -1, batch_dim: int = 0, inversion_mode: str = "crop"):
+    def __init__(self, sr: int = 44100, window_size: int = 1024, hop_size: int = 256, dim: int = -1, batch_dim: int = 0, inversion_mode: str = "crop"):
         super().__init__()
+        self.sr = sr
         self.window_size = window_size
         self.hop_size = hop_size or self.window_size
         assert self.window_size >= self.hop_size
@@ -142,6 +144,19 @@ class Window(AudioTransform):
         chunks = frame(x, self.window_size, self.hop_size, self.dim)
         return chunks
 
+
+    @torch.jit.export
+    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor):
+        transform = self.forward(x)
+        n_chunks = transform.size(-2)
+        shifts = torch.arange(n_chunks) * self.hop_size / self.sr
+        new_shape = [t for t in transform.shape[:-2]]
+        new_shape.append(n_chunks)
+        new_strides = [0] * (x.ndim-1)
+        new_strides.append(1)
+        shifts = shifts.as_strided(new_shape, new_strides)
+        new_time = shifts + time.unsqueeze(-1)
+        return transform, new_time
     # def test_inversion(self, x: torch.Tensor):
     #     x = torch.arange(100).unsqueeze(0).unsqueeze(1)
     #     x = x.repeat(4, 3, 1)

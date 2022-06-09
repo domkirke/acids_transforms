@@ -91,12 +91,17 @@ class STFT(AudioTransform):
         ), window=window, return_complex=True, onesided=True).transpose(-2, -1)
         self._replace_phase_buffer(x_fft.angle())
         return x_fft.reshape(batch_shape + x_fft.shape[-2:])
-    
-    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
+
+    @torch.jit.export
+    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor):
         transform = self.forward(x)
         n_chunks = transform.size(-2)
         shifts = torch.arange(n_chunks) * self.hop_length / self.sr
-        shifts = shifts.as_strided((*transform.shape[:-2], n_chunks), (*((0,)*(x.ndim-1)), 1))
+        new_shape = [t for t in transform.shape[:-2]]
+        new_shape.append(n_chunks)
+        new_strides = [0] * (x.ndim-1)
+        new_strides.append(1)
+        shifts = shifts.as_strided(new_shape, new_strides)
         new_time = shifts + time.unsqueeze(-1)
         return transform, new_time
 
@@ -107,7 +112,8 @@ class STFT(AudioTransform):
             x_inv = self.invert_without_phase(x, inversion_mode, tolerance)
         else:
             window = self.inv_window[:self.n_fft.item()]
-            x_inv = torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), window=window, onesided=True)
+            x_inv = torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(),
+                                hop_length=self.hop_length.item(), window=window, onesided=True)
         return x_inv.reshape(batch_shape + x_inv.shape[-1:])
 
     @staticmethod
@@ -154,11 +160,12 @@ class STFT(AudioTransform):
                 x_stft.abs(), inversion_mode=inv_type)
         return outs
 
-
     @classmethod
-    def test_scripted_transform(cls, transform: AudioTransform, invert: bool = True):
-        x = torch.zeros(2, 2, 44100)
-        x_t = transform(x)
+    def test_scripted_transform(cls, transform: AudioTransform, invert: bool = True, batch_size = (2, 2)):
+        x = torch.zeros(*batch_size, 44100)
+        time = torch.zeros(*batch_size)
+        x_t = transform.forward(x)
+        x_t, time_t = transform.forward_with_time(x, time)
         if invert:
             x_inv = transform.invert(x_t)
             for inv_type in cls.get_inversion_modes():
@@ -168,7 +175,8 @@ class STFT(AudioTransform):
 class RealtimeSTFT(STFT):
 
     def __init__(self, sr: int = 44100, n_fft: int = 1024, hop_length: int = 256, dtype: torch.dtype = None, inversion_mode: InversionEnumType = "random", window: str = "hann", batch_size: int = 2):
-        super().__init__(sr=sr, n_fft=n_fft, hop_length=hop_length, dtype=dtype, inversion_mode=inversion_mode, window=window)
+        super().__init__(sr=sr, n_fft=n_fft, hop_length=hop_length,
+                         dtype=dtype, inversion_mode=inversion_mode, window=window)
         self.batch_size = batch_size
 
     @property
@@ -198,6 +206,10 @@ class RealtimeSTFT(STFT):
         x_fft = torch.fft.rfft(x * window.unsqueeze(0))
         self._replace_phase_buffer(x_fft.angle())
         return x_fft
+    
+    @torch.jit.export
+    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor):
+        return self(x), time
 
     @torch.jit.export
     def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-6) -> torch.Tensor:
@@ -242,9 +254,8 @@ class RealtimeSTFT(STFT):
         if time is None:
             return transform
         else:
-            shifts = torch.arange(x.size(-2)) * self.hop_length.item() / self.sr
-            return transform, time + shifts
-        
+            return transform, None
+
     def test_inversion(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         n_fft = self.n_fft.item()
         hop_length = self.hop_length.item()
@@ -261,8 +272,6 @@ class RealtimeSTFT(STFT):
                                n_fft] += self.invert(x_stft.abs(), inversion_mode=inv_type)
         return outs
 
-    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
-        return AudioTransform.forward_with_time(self, x, time)
 
     @classmethod
     def test_scripted_transform(cls, transform: AudioTransform, invert: bool = True):
