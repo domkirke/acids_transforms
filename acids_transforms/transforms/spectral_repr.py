@@ -204,12 +204,10 @@ class Magnitude(_Representation):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         mag = x.abs()
         if self.mel:
-            if mag.ndim == 3:
+            if mag.ndim >= 3:
                 mag = torch.bmm(mag, self.mel_bank.repeat(mag.size(0), 1, 1))
             else:
-                mag = torch.matmul(mag, self.mel_bank)
-                if x.ndim == 1:
-                    mag = mag[0]
+                mag = torch.matmul(mag, self.mel_bank)[0]
         mag = self.contrast(mag)
         mag = self.norm(mag)
         return mag
@@ -219,11 +217,11 @@ class Magnitude(_Representation):
         mag = self.norm.invert(x)
         mag = self.invert_contrast(mag)
         if self.mel:
-            if mag.ndim == 3:
+            if mag.ndim >= 3:
                 mag = torch.bmm(
                     mag, self.inverse_mel_bank.repeat(mag.size(0), 1, 1))
             else:
-                mag = torch.matmul(mag, self.inverse_mel_bank)
+                mag = torch.matmul(mag, self.inverse_mel_bank)[0]
         return mag
 
     @torch.jit.export
