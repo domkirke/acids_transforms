@@ -53,7 +53,7 @@ class Mono(AudioTransform):
             time = time[..., 0]
         else:
             time = time[..., 0].unsqueeze(-1)
-        return self(x) 
+        return self(x), time
 
     def get_inversion_modes(self):
         return ['mono', 'stereo']
