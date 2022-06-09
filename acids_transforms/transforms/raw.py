@@ -21,7 +21,7 @@ class Mono(AudioTransform):
     def needs_scaling(self):
         return False
 
-    def __init__(self, mode: str = "mix", normalize: bool = False, squeeze: bool = False, inversion_mode="mono"):
+    def __init__(self, mode: str = "mix", normalize: bool = False, squeeze: bool = True, inversion_mode="mono"):
         super().__init__()
         self.mode = mode
         self.squeeze = squeeze
@@ -47,6 +47,13 @@ class Mono(AudioTransform):
         if self.squeeze:
             x = x.squeeze(-2)
         return x
+
+    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor):
+        if self.squeeze:
+            time = time[..., 0]
+        else:
+            time = time[..., 0].unsqueeze(-1)
+        return self(x) 
 
     def get_inversion_modes(self):
         return ['mono', 'stereo']

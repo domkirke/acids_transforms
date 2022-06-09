@@ -30,7 +30,7 @@ def get_invertible_transforms():
 def test_forward(test_files, transform: AudioTransform):
     transform = transform()
     raw, name = test_files
-    time = torch.zeros(raw.size(0), 1)
+    time = torch.zeros(raw.shape[:-1])
     y = transform.test_forward(raw)
     y, time = transform.test_forward(raw, time)
 
