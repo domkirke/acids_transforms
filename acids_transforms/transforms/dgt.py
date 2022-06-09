@@ -4,8 +4,8 @@ from enum import Enum
 from .stft import STFT
 from .base import AudioTransform, InversionEnumType
 from ..utils.heapq import heappop, heappush
-from ..utils.misc import frame
-from typing import Tuple, Dict, Union
+from ..utils.misc import frame, reshape_batches
+from typing import Tuple, Dict, Union, List
 
 
 __all__ = ['DGT', 'RealtimeDGT']
@@ -52,19 +52,30 @@ class DGT(STFT):
 
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x, batch_shape = reshape_batches(x, -1)
         window = self.window[:self.n_fft.item()]
         x_dgt = torch.stft(x, n_fft=self.n_fft.item(), hop_length=self.hop_length.item(
         ), window=window, return_complex=True, onesided=True).transpose(-2, -1)
         self._replace_phase_buffer(x_dgt.angle())
-        return x_dgt
+        return x_dgt.reshape(batch_shape + x_dgt.shape[-2:])
+
+    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
+        transform = self.forward(x)
+        n_chunks = transform.size(-2)
+        shifts = torch.arange(n_chunks) * self.hop_length / self.sr
+        shifts = shifts.as_strided((*transform.shape[:-2], n_chunks), (*((0,)*(x.ndim-1)), 1))
+        new_time = shifts + time.unsqueeze(-1)
+        return transform, new_time
 
     @torch.jit.export
     def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
+        x, batch_shape = reshape_batches(x, -2)
         if not torch.is_complex(x):
-            return self.invert_without_phase(x, inversion_mode, tolerance)
+            x_inv = self.invert_without_phase(x, inversion_mode, tolerance)
         else:
             window = self.inv_window[:self.n_fft.item()]
-            return torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), window=window, onesided=True)
+            x_inv = torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), window=window, onesided=True)
+        return x_inv.reshape(batch_shape + x_inv.shape[-1:])            
 
     @torch.jit.export
     def set_params(self, n_fft: int, hop_length: int) -> None:
@@ -134,9 +145,6 @@ class DGT(STFT):
     def get_inversion_modes():
         return ["pghi", "griffin_lim", "random", "keep_input"]
     
-    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
-        return AudioTransform.forward_with_time(self, x, time)
-
     def perform_hgi(self, X: torch.Tensor, tgradw: torch.Tensor, fgradw: torch.Tensor, abstol: float = 1e-7, tol: float = 1e-6) -> torch.Tensor:
         spectrogram = X
         phase = torch.zeros_like(spectrogram)
@@ -215,13 +223,16 @@ class RTDGT_INVERSION_MODES(Enum):
 
 
 class RealtimeDGT(DGT):
-    def __init__(self, sr: int = 44100, n_fft=1024, hop_length=256, dtype=None, batch_size: int = 2, inversion_mode: InversionEnumType = "pghi"):
+    def __init__(self, sr: int = 44100, n_fft=1024, hop_length=256, dtype=None, batch_size: Union[int, List[int]] = 2, inversion_mode: InversionEnumType = "pghi"):
         super().__init__(sr=sr, n_fft=n_fft, hop_length=hop_length, dtype=dtype, inversion_mode=inversion_mode)
-        self.batch_size = batch_size
+        if isinstance(batch_size, int):
+            self.batch_size = [batch_size]
+        else:
+            self.batch_size = batch_size
         self.register_buffer(
-            'hgi_mag_buffer', torch.zeros(batch_size, 2, n_fft//2+1))
+            'hgi_mag_buffer', torch.zeros(*self.batch_size, 2, n_fft//2+1))
         self.register_buffer("hgi_phase_buffer",
-                             torch.zeros(batch_size, n_fft//2+1))
+                             torch.zeros(*self.batch_size, n_fft//2+1))
 
     def __repr__(self):
         repr_str = f"RealtimeDGT(n_fft={self.n_fft.item()}, hop_length={self.hop_length.item()}" \
@@ -233,26 +244,25 @@ class RealtimeDGT(DGT):
         return ['random', 'pghi', 'keep_input']
 
     @torch.jit.export
-    def get_batch_size(self, batch_size: int):
-        return batch_size
+    def get_batch_size(self) -> List[int]:
+        return [int(b) for b in self.batch_size]
 
     @torch.jit.export
-    def set_batch_size(self, batch_size: int):
+    def set_batch_size(self, batch_size: Union[int, List[int]]):
         self.reset(batch_size)
-        self.batch_size = batch_size
 
     @torch.jit.export
-    def batch_size(self) -> Union[None, int]:
-        return int(self.hgi_mag_buffer.size(0))
+    def batch_size(self) -> List[int]:
+        return self.hgi_mag_buffer.shape[:-2]
 
     @torch.jit.export
-    def reset(self, batch_size: int) -> None:
-        if batch_size == self.batch_size:
-            self.hgi_mag_buffer.zero_()
-            self.hgi_phase_buffer.zero_()
+    def reset(self, batch_size: Union[int, List[int]]) -> None:
+        if isinstance(batch_size, int):
+            self.batch_size = [batch_size]
         else:
-            self.hgi_mag_buffer = torch.zeros(batch_size, 2, self.n_fft//2+1)
-            self.hgi_phase_buffer = torch.zeros(batch_size, self.n_fft//2+1)
+            self.batch_size = torch.Size(batch_size)
+        self.hgi_mag_buffer = torch.zeros(torch.Size(self.batch_size) + torch.Size([2, int(self.n_fft)//2+1]))
+        self.hgi_phase_buffer = torch.zeros(torch.Size(self.batch_size) + torch.Size([int(self.n_fft)//2+1]))
 
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -260,6 +270,9 @@ class RealtimeDGT(DGT):
         x_dgt = torch.fft.rfft(x * window.unsqueeze(0))
         self._replace_phase_buffer(x_dgt.angle())
         return x_dgt
+
+    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
+        return AudioTransform.forward_with_time(self, x, time)
 
     @torch.jit.export
     def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = "pghi", tolerance: float = 1.e-6) -> torch.Tensor:
@@ -295,7 +308,10 @@ class RealtimeDGT(DGT):
         self.hgi_phase_buffer = x.angle()
 
     def pghi(self, mag: torch.Tensor, tolerance: float = 1e-6):
-        mag = torch.cat([self.hgi_mag_buffer, mag.unsqueeze(-2)], -2)
+        mag, batch_shape = reshape_batches(mag, -1)
+        hgi_mag_buffer, _ = reshape_batches(self.hgi_mag_buffer, -2)
+        hgi_phase_buffer, _ = reshape_batches(self.hgi_phase_buffer, -1)
+        mag = torch.cat([hgi_mag_buffer, mag.unsqueeze(-2)], -2)
         # concatenate to buffer
         mag = torch.clamp(mag.clone(), self.eps, None)
         # get derivatives
@@ -304,10 +320,10 @@ class RealtimeDGT(DGT):
         phases = []
         for i in range(mag.size(0)):
             phase = self.perform_hgi(
-                mag[i], self.hgi_phase_buffer[i], tgradw[i], fgradw[i], tolerance)
+                mag[i], hgi_phase_buffer[i], tgradw[i], fgradw[i], tolerance)
             phases.append(phase)
         phases = torch.stack(phases)
-        return phases
+        return phases.reshape(batch_shape + phases.shape[1:])
 
     def modgabphasegrad(self, mag):
         """
@@ -351,8 +367,6 @@ class RealtimeDGT(DGT):
                 magnitude_heap, (-spectrogram[0, item[0]], (zero_tensor, item[0].long().unsqueeze(0))))
         if len(magnitude_heap) == 0:
             return new_phase
-            # item = max_indices[0]
-            # heappush(magnitude_heap, (-spectrogram[1, item[0]], (torch.Tensor([1]).int(), item[0].unsqueeze(0))))
         while max_val > abstol:
             while len(magnitude_heap) > 0:
                 max_val, max_pos = heappop(magnitude_heap)
@@ -403,25 +417,26 @@ class RealtimeDGT(DGT):
 
     # Tests
     def test_inversion(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        self.reset(x.shape[0])
+        self.reset(x.shape[:-1])
         n_fft = self.n_fft.item()
         hop_length = self.hop_length.item()
         x_framed = frame(x, n_fft, hop_length, -1)
         x_inv_shape = x_framed.size(-2) * hop_length + n_fft
-        outs = {k: torch.zeros(x.size(0), x_inv_shape, device=x.device) for k in [
+        outs = {k: torch.zeros(*x.shape[:-1], x_inv_shape, device=x.device) for k in [
             'direct'] + self.get_inversion_modes()}
         for n in range(x_framed.size(-2)):
             x_stft = self.forward(x_framed[..., n, :])
-            outs['direct'][:, n*hop_length:n *
+            outs['direct'][..., n*hop_length:n *
                            hop_length+n_fft] += self.invert(x_stft)
             for inv_type in self.get_inversion_modes():
-                outs[inv_type][:, n*hop_length:n*hop_length +
+                outs[inv_type][..., n*hop_length:n*hop_length +
                                n_fft] += self.invert(x_stft.abs(), inversion_mode=inv_type)
         return outs
 
     @classmethod
     def test_scripted_transform(cls, transform: AudioTransform, invert: bool = True):
-        x = torch.zeros(2, transform.n_fft.item())
+        x = torch.zeros(2, 1, transform.n_fft.item())
+        transform.reset(list(x.shape[:-1]))
         x_t = transform(x)
         if cls.invertible:
             x_inv = transform.invert(x_t)

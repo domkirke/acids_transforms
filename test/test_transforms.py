@@ -1,4 +1,3 @@
-from email.mime import audio
 import torch
 import torchaudio
 import os
@@ -31,10 +30,9 @@ def get_invertible_transforms():
 def test_forward(test_files, transform: AudioTransform):
     transform = transform()
     raw, name = test_files
-    for i in range(raw.size(0)):
-        time = torch.zeros(1)
-        y = transform.test_forward(raw[i])
-        y, time = transform.test_forward(raw[i], time)
+    time = torch.zeros(raw.size(0), 1)
+    y = transform.test_forward(raw)
+    y, time = transform.test_forward(raw, time)
 
 
 @pytest.mark.parametrize("transform", get_invertible_transforms())
@@ -44,13 +42,14 @@ def test_inversion(test_files, transform: AudioTransform):
     raw, names = test_files
     transform_name = transform.__name__.split(".")[-1]
     transform = transform()
-    for i in range(raw.size(0)):
-        x_inv = transform.test_inversion(raw[i])
-        for k, v in x_inv.items():
-            if v.ndim == 1:
-                v = v.unsqueeze(0)
+    x_inv = transform.test_inversion(raw)
+    for k, v in x_inv.items():
+        for i in range(raw.shape[0]):
+            x_tmp = v[i]
+            if x_tmp.ndim == 1:
+                x_tmp = x_tmp.unsqueeze(0)
             torchaudio.save(
-                f"test/reconstructions/{names[i]}_{transform_name}_{k}.wav", v, sample_rate=44100)
+                f"test/reconstructions/{names[i]}_{transform_name}_{k}.wav", x_tmp, sample_rate=44100)
     return True
 
 

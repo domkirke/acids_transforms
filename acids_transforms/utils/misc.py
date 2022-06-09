@@ -58,6 +58,9 @@ def import_data(path: str, sr=44100):
     else:
         raise FileNotFoundError(path)
 
+def format_input_data(x: torch.Tensor, dim=-1) -> Tuple[torch.Tensor, torch.Size]:
+    batch_size = x.shape[:dim]
+    data_size = x.shape[dim:]
 
 def fdiff_forward(x):
     inst_f = torch.cat([x[..., 0, :].unsqueeze(-2),
@@ -160,3 +163,16 @@ def frame(tensor: torch.Tensor, wsize: int, hsize: int, dim: int):
     # strides = strides[:dim] + (hsize,) + strides[dim:]
     # strides = list(strides[dim:], (strides[dim]*hsize) + [hsize * new_stride] + list(strides[dim+1:])
     return torch.as_strided(tensor, shape, strides)
+
+    
+def reshape_batches(x: torch.Tensor, dim: int, allow_clone: bool = True):
+    batch_size = x.shape[:dim]
+    event_size = x.shape[dim:]
+    if x.is_contiguous():
+        x = x.view(torch.Size([-1]) + event_size)
+    else:
+        if allow_clone:
+            x = x.reshape(torch.Size([-1]) + event_size)
+        else:
+            raise ValueError("found non contiguous tensor of size : %s"%x.shape)
+    return x, batch_size

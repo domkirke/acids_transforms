@@ -135,6 +135,13 @@ class Window(AudioTransform):
         chunks = frame(x, self.window_size, self.hop_size, self.dim)
         return chunks
 
+    # def test_inversion(self, x: torch.Tensor):
+    #     x = torch.arange(100).unsqueeze(0).unsqueeze(1)
+    #     x = x.repeat(4, 3, 1)
+    #     w = Window(10, 5)
+    #     x_w = w(x)
+    #     y = w.invert(x_w)
+
     @torch.jit.export
     def invert(self, x: torch.Tensor, inversion_mode:  InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
         if inversion_mode is None:
@@ -149,14 +156,11 @@ class Window(AudioTransform):
             new_shape = old_shape[:dim-1]
             new_shape.append(old_shape[dim-1]*old_shape[dim])
             new_shape.extend(old_shape[dim+1:])
-            if x.is_contiguous():
-                x = x.view(new_shape)
-            else:
-                x = x.reshape(new_shape)
+            x = x.reshape(new_shape)
         else:
             if self.inversion_mode == "crop":
                 new_x = x.index_select(self.dim, torch.arange(self.hop_size))
-                new_x = list(x.split(1, self.dim-1))
+                new_x = list(new_x.split(1, self.dim-1))
                 x_tail = x.index_select(dim-1, torch.tensor([x.size(dim-1)-1]).long())
                 x_tail = x_tail.index_select(dim, torch.arange(self.hop_size, x.size(dim)))
                 new_x.append(x_tail)

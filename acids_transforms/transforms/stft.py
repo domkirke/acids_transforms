@@ -85,19 +85,30 @@ class STFT(AudioTransform):
 
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x, batch_shape = reshape_batches(x, -1)
         window = self.window[:self.n_fft.item()]
         x_fft = torch.stft(x, n_fft=self.n_fft.item(), hop_length=self.hop_length.item(
         ), window=window, return_complex=True, onesided=True).transpose(-2, -1)
         self._replace_phase_buffer(x_fft.angle())
-        return x_fft
+        return x_fft.reshape(batch_shape + x_fft.shape[-2:])
+    
+    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
+        transform = self.forward(x)
+        n_chunks = transform.size(-2)
+        shifts = torch.arange(n_chunks) * self.hop_length / self.sr
+        shifts = shifts.as_strided((*transform.shape[:-2], n_chunks), (*((0,)*(x.ndim-1)), 1))
+        new_time = shifts + time.unsqueeze(-1)
+        return transform, new_time
 
     @torch.jit.export
     def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
+        x, batch_shape = reshape_batches(x, -2)
         if not torch.is_complex(x):
-            return self.invert_without_phase(x, inversion_mode, tolerance)
+            x_inv = self.invert_without_phase(x, inversion_mode, tolerance)
         else:
             window = self.inv_window[:self.n_fft.item()]
-            return torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), window=window, onesided=True)
+            x_inv = torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), window=window, onesided=True)
+        return x_inv.reshape(batch_shape + x_inv.shape[-1:])
 
     @staticmethod
     def get_inversion_modes():
@@ -143,16 +154,10 @@ class STFT(AudioTransform):
                 x_stft.abs(), inversion_mode=inv_type)
         return outs
 
-    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
-        transform = self.forward(x)
-        n_chunks = transform.size(2)
-        shifts = torch.arange(n_chunks) * self.hop_length / self.sr
-        new_time = shifts + time
-        return transform, new_time
 
     @classmethod
     def test_scripted_transform(cls, transform: AudioTransform, invert: bool = True):
-        x = torch.zeros(2, 44100)
+        x = torch.zeros(2, 2, 44100)
         x_t = transform(x)
         if invert:
             x_inv = transform.invert(x_t)
@@ -228,25 +233,6 @@ class RealtimeSTFT(STFT):
         return torch.fft.irfft(x) * window.unsqueeze(0)
 
     # TESTS
-    def test_inversion(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        n_fft = self.n_fft.item()
-        hop_length = self.hop_length.item()
-        x_framed = frame(x, n_fft, hop_length, -1)
-        x_inv_shape = x_framed.size(-2) * hop_length + n_fft
-        outs = {k: torch.zeros(x.size(0), x_inv_shape, device=x.device) for k in [
-            'direct'] + self.get_inversion_modes()}
-        for n in range(x_framed.size(-2)):
-            x_stft = self.forward(x_framed[..., n, :])
-            outs['direct'][:, n*hop_length:n *
-                           hop_length+n_fft] += self.invert(x_stft)
-            for inv_type in self.get_inversion_modes():
-                outs[inv_type][:, n*hop_length:n*hop_length +
-                               n_fft] += self.invert(x_stft.abs(), inversion_mode=inv_type)
-        return outs
-
-    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
-        return AudioTransform.forward_with_time(self, x, time)
-
     def test_forward(self, x: torch.Tensor, time: torch.Tensor = None):
         x = frame(x, self.n_fft.item(), self.hop_length.item(), -1)
         transform = []
@@ -258,6 +244,25 @@ class RealtimeSTFT(STFT):
         else:
             shifts = torch.arange(x.size(-2)) * self.hop_length.item() / self.sr
             return transform, time + shifts
+        
+    def test_inversion(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        n_fft = self.n_fft.item()
+        hop_length = self.hop_length.item()
+        x_framed = frame(x, n_fft, hop_length, -1)
+        x_inv_shape = x_framed.size(-2) * hop_length + n_fft
+        outs = {k: torch.zeros(*x.shape[:-1], x_inv_shape, device=x.device) for k in [
+            'direct'] + self.get_inversion_modes()}
+        for n in range(x_framed.size(-2)):
+            x_stft = self.forward(x_framed[..., n, :])
+            outs['direct'][..., n*hop_length:n *
+                           hop_length+n_fft] += self.invert(x_stft)
+            for inv_type in self.get_inversion_modes():
+                outs[inv_type][..., n*hop_length:n*hop_length +
+                               n_fft] += self.invert(x_stft.abs(), inversion_mode=inv_type)
+        return outs
+
+    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
+        return AudioTransform.forward_with_time(self, x, time)
 
     @classmethod
     def test_scripted_transform(cls, transform: AudioTransform, invert: bool = True):

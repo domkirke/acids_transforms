@@ -1,5 +1,7 @@
 from numbers import Real
 from enum import Enum
+
+from numpy import reshape
 from .base import AudioTransform, InversionEnumType
 from ..utils.misc import *
 from .stft import STFT
@@ -83,6 +85,7 @@ class Real(_Representation):
 
     def test_inversion(self, x: torch.Tensor):
         # simulate STFT
+        x, batch_size = reshape_batches(x, -1)
         x = torch.stft(x, 512, 128, return_complex=True)
         imag = x.imag
         self.scale_data(x)
@@ -90,6 +93,7 @@ class Real(_Representation):
         x_real_inv = self.invert(x_real)
         x_inv_fft = x_real_inv + imag * 1j
         x_inv = torch.istft(x_inv_fft, 512, 128)
+        x_inv = x_inv.reshape(*batch_size, x_inv.shape[-1])
         return {'direct': x_inv}
 
 
@@ -112,6 +116,7 @@ class Imaginary(_Representation):
 
     def test_inversion(self, x: torch.Tensor):
         # simulate STFT
+        x, batch_size = reshape_batches(x, -1)
         x = torch.stft(x, 1024, 256, return_complex=True).transpose(-2, -1)
         real = x.real
         self.scale_data(x)
@@ -119,6 +124,7 @@ class Imaginary(_Representation):
         x_imag_inv = self.invert(x_imag)
         x_inv_fft = real + x_imag_inv * 1j
         x_inv = torch.istft(x_inv_fft.transpose(-2, -1), 1024, 256)
+        x_inv = x_inv.reshape(*batch_size, x_inv.shape[-1])
         return {'direct': x_inv}
 
 
@@ -195,7 +201,6 @@ class Magnitude(_Representation):
         else:
             raise TypeError("unknown contrast type %s" % self.contrast_mode)
 
-    @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         mag = x.abs()
         if self.mel:
@@ -203,6 +208,8 @@ class Magnitude(_Representation):
                 mag = torch.bmm(mag, self.mel_bank.repeat(mag.size(0), 1, 1))
             else:
                 mag = torch.matmul(mag, self.mel_bank)
+                if x.ndim == 1:
+                    mag = mag[0]
         mag = self.contrast(mag)
         mag = self.norm(mag)
         return mag
@@ -221,10 +228,12 @@ class Magnitude(_Representation):
 
     @torch.jit.export
     def scale_data(self, x: torch.Tensor) -> None:
-        return self.norm.scale_data(x.abs())
+        x = self.contrast(x.abs())
+        return self.norm.scale_data(x)
 
     def test_inversion(self, x: torch.Tensor):
         # simulate STFT
+        x, batch_size = reshape_batches(x, -1)
         x = torch.stft(x, 1024, 256, return_complex=True).transpose(-2, -1)
         angle = x.angle()
         self.scale_data(x)
@@ -232,6 +241,7 @@ class Magnitude(_Representation):
         x_mag_inv = self.invert(x_mag)
         x_inv_fft = x_mag_inv * torch.exp(angle * 1j)
         x_inv = torch.istft(x_inv_fft.transpose(-2, -1), 1024, 256)
+        x_inv = x_inv.reshape(*batch_size, x_inv.shape[-1])
         return {'direct': x_inv}
 
 
@@ -251,6 +261,7 @@ class Phase(_Representation):
 
     def test_inversion(self, x: torch.Tensor):
         # simulate STFT
+        x, batch_size = reshape_batches(x, -1)
         x = torch.stft(x, 1024, 256, return_complex=True)
         mag = x.abs()
         self.scale_data(x)
@@ -258,6 +269,7 @@ class Phase(_Representation):
         x_angle_inv = self.invert(x_angle)
         x_inv_fft = mag * torch.exp(x_angle_inv * 1j)
         x_inv = torch.istft(x_inv_fft, 1024, 256)
+        x_inv = x_inv.reshape(*batch_size, x_inv.shape[-1])
         return {'direct': x_inv}
 
 
@@ -282,13 +294,13 @@ class IF(_Representation):
         phase = unwrap(data.angle())
         if self.method == "backward":
             inst_f = fdiff_backward(phase)
-            inst_f[1:] /= (-torch.pi)
+            inst_f[..., 1:, :] /= (-torch.pi)
         elif self.method == "forward":
             inst_f = fdiff_forward(phase)
-            inst_f[:-1] /= (torch.pi)
+            inst_f[..., :-1, :] /= (torch.pi)
         elif self.method == "central":
             inst_f = fdiff_central(phase)
-            inst_f[1:-1] /= (2 * torch.pi)
+            inst_f[..., 1:-1, :] /= (2 * torch.pi)
         else:
             raise AttributeError("method %s not known" % self.method)
         if self.weighted:
@@ -319,26 +331,32 @@ class IF(_Representation):
     def invert(self, x, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
         x_denorm = self.norm.invert(x)
         if self.method == "backward":
-            x_denorm[1:] *= -torch.pi
+            x_denorm[..., 1:, :] *= -torch.pi
             x_denorm = fint_backward(x_denorm)
         if self.method == "forward":
-            x_denorm[:-1] *= torch.pi
+            x_denorm[..., :-1, :] *= torch.pi
             x_denorm=fint_forward(x_denorm)
         elif self.method == "central":
-            x_denorm[1:-1] *= torch.pi
+            x_denorm[..., 1:-1, :] *= (2 * torch.pi)
             x_denorm=fint_central(x_denorm)
         return x_denorm
 
     def test_inversion(self, x: torch.Tensor):
         # simulate STFT
+        x, batch_size = reshape_batches(x, -1)
         x=torch.stft(x, 1024, 256, return_complex=True).transpose(-2, -1)
         mag=x.abs()
-        self.scale_data(x)
-        x_angle=self(x)
-        x_angle_inv=self.invert(x_angle)
-        x_inv_fft=mag * torch.exp(x_angle_inv * 1j)
-        x_inv=torch.istft(x_inv_fft.transpose(-2, -1), 1024, 256)
-        return {'direct': x_inv}
+        outs = {}
+        for inv_mode in self.get_if_methods():
+            self.method = inv_mode 
+            self.scale_data(x)
+            x_angle=self(x)
+            x_angle_inv=self.invert(x_angle)
+            x_inv_fft=mag * torch.exp(x_angle_inv * 1j)
+            x_inv=torch.istft(x_inv_fft.transpose(-2, -1), 1024, 256)
+            x_inv = x_inv.reshape(*batch_size, x_inv.shape[-1])
+            outs[inv_mode] = x_inv
+        return outs
 
 
 SpectralRepresentationType=Union[torch.Tensor,
@@ -411,11 +429,13 @@ class SpectralRepresentation(AudioTransform):
 
     def test_inversion(self, x: torch.Tensor):
         # simulate STFT
+        x, batch_size = reshape_batches(x, -1)
         x=torch.stft(x, 1024, 256, return_complex=True).transpose(-1, -2)
         self.scale_data(x)
         x_t=self(x)
         x_t_inv=self.invert(x_t)
         x_inv=torch.istft(x_t_inv.transpose(-1, -2), 1024, 256)
+        x_inv = x_inv.reshape(*batch_size, x_inv.shape[-1])
         return {'direct': x_inv}
 
     @ classmethod
@@ -437,6 +457,20 @@ class Cartesian(SpectralRepresentation):
     def __init__(self, sr: int=44100, real_mode="gaussian", imag_mode="gaussian", stack=-2):
         super(Cartesian, self).__init__(sr, Real, Imaginary,
                                         real_mode, imag_mode, stack=stack)
+
+    @ torch.jit.export
+    def invert(self, x, inversion_mode: InversionEnumType=None, tolerance: float=1.e-4) -> torch.Tensor:
+        if self.stack is None:
+            real=x[0]
+            imag=x[1]
+        else:
+            real=x.index_select(
+                self.stack, torch.tensor(0)).squeeze(self.stack)
+            imag=x.index_select(
+                self.stack, torch.tensor(1)).squeeze(self.stack)
+        real=self.magnitude.invert(real)
+        imag=self.phase.invert(imag)
+        return real + imag * torch.full(imag.shape, 1j, device=imag.device)
 
 
 class Polar(SpectralRepresentation):
@@ -461,6 +495,8 @@ class PolarIF(SpectralRepresentation):
                                       magnitude_mode, phase_mode, stack=stack)
 
     def test_inversion(self, x: torch.Tensor):
+        # reshape x in case
+        x, batch_size = reshape_batches(x, -1)
         # simulate STFT
         x=torch.stft(x, 1024, 256, return_complex=True).transpose(-1, -2)
         outs={}
@@ -470,5 +506,5 @@ class PolarIF(SpectralRepresentation):
             x_t=self(x)
             x_t_inv=self.invert(x_t)
             x_inv=torch.istft(x_t_inv.transpose(-1, -2), 1024, 256)
-            outs[method]=x_inv
+            outs[method]=x_inv.reshape(*batch_size, x_inv.shape[-1])
         return outs

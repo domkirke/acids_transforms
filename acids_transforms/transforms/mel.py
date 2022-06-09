@@ -42,12 +42,13 @@ class MFCC(AudioTransform):
         self.n_mels = n_mels
         self.transform = torchaudio.transforms.MelSpectrogram(
             self.sr, n_fft, hop_length=hop_length, n_mels=n_mels, power=power)
-
+    
     def forward_with_time(self, x: torch.Tensor, time: torch.Tensor): 
         transform = self.forward(x)
-        n_chunks = transform.size(2)
+        n_chunks = transform.size(-2)
         shifts = torch.arange(n_chunks) * self.hop_length / self.sr
-        new_time = shifts + time
+        shifts = shifts.as_strided((*transform.shape[:-2], n_chunks), (*((0,)*(x.ndim-1)), 1))
+        new_time = shifts + time.unsqueeze(-1)
         return transform, new_time
 
     @torch.jit.export
