@@ -50,6 +50,9 @@ class DGT(STFT):
         else:
             raise ValueError("Inversion mode %s not known" % inversion_mode)
 
+    def realtime(self):
+        return RealtimeDGT(sr=self.sr, n_fft=self.n_fft, hop_length=self.hop_length)
+
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x, batch_shape = reshape_batches(x, -1)

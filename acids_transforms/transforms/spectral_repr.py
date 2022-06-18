@@ -156,26 +156,26 @@ class Magnitude(_Representation):
         if eps is None:
             eps = torch.finfo(dtype).eps
         self.register_buffer("eps", torch.tensor(eps))
-        if mel:
-            assert sr is not None
-            assert n_fft is not None
-            n_bins = n_fft // 2 + 1
-            fft_scale = torch.arange(n_fft // 2 + 1) / n_fft * sr
-            if not self.keep_nyquist:
-                fft_scale = fft_scale[..., 1:]
-            mel_bank = torchaudio.functional.melscale_fbanks(
-                n_bins, fft_scale[0], fft_scale[-1], n_bins, sr)
-            mel_norm = mel_bank.sum(0)
-            mel_bank_norm = mel_bank / \
-                torch.where(mel_norm != 0, mel_norm,
-                            torch.ones_like(mel_norm)).unsqueeze(0)
-            mel_inv_norm = mel_bank.sum(1)
-            mel_bank_inv_norm = mel_bank / \
-                torch.where(mel_inv_norm != 0, mel_inv_norm,
-                            torch.ones_like(mel_inv_norm)).unsqueeze(1)
-            self.register_buffer("mel_bank", mel_bank_norm.unsqueeze(0))
-            self.register_buffer(
-                "inverse_mel_bank", mel_bank_inv_norm.transpose(-2, -1).unsqueeze(0))
+        # make mel bank
+        assert sr is not None
+        assert n_fft is not None
+        n_bins = n_fft // 2 + 1
+        fft_scale = torch.arange(n_fft // 2 + 1) / n_fft * sr
+        if not self.keep_nyquist:
+            fft_scale = fft_scale[..., 1:]
+        mel_bank = torchaudio.functional.melscale_fbanks(
+            n_bins, fft_scale[0], fft_scale[-1], n_bins, sr)
+        mel_norm = mel_bank.sum(0)
+        mel_bank_norm = mel_bank / \
+            torch.where(mel_norm != 0, mel_norm,
+                        torch.ones_like(mel_norm)).unsqueeze(0)
+        mel_inv_norm = mel_bank.sum(1)
+        mel_bank_inv_norm = mel_bank / \
+            torch.where(mel_inv_norm != 0, mel_inv_norm,
+                        torch.ones_like(mel_inv_norm)).unsqueeze(1)
+        self.register_buffer("mel_bank", mel_bank_norm.unsqueeze(0))
+        self.register_buffer(
+            "inverse_mel_bank", mel_bank_inv_norm.transpose(-2, -1).unsqueeze(0))
 
     def contrast(self, mag: torch.Tensor) -> torch.Tensor:
         if self.contrast_mode == "log1p":

@@ -50,6 +50,9 @@ class AudioTransform(nn.Module):
     def forward_with_time(self, x: torch.Tensor, time: torch.Tensor):
         return self.forward(x), time
 
+    def realtime(self):
+        return self
+
     def test_forward(self, x: torch.Tensor, time: torch.Tensor = None):
         if time is None:
             return self.forward(x)
