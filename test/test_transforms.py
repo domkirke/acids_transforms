@@ -84,6 +84,7 @@ def test_combinations(test_files, transform):
     raw, names = test_files
     transform_name = transform
     transform = combinations[transform]
+    transform.realtime()
     if transform.scriptable:
         transform = torch.jit.script(transform)
     if transform.needs_scaling:

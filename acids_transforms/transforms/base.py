@@ -127,6 +127,9 @@ class ComposeAudioTransform(AudioTransform):
         else:
             return ComposeAudioTransform([other] + self.transforms)
 
+    def realtime(self):
+        return ComposeAudioTransform(transforms=[t.realtime() for t in self.transforms], sr=self.sr)
+
     @torch.jit.export
     def scale_data(self, x):
         for t in self.transforms:
