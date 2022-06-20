@@ -10,7 +10,6 @@ MagnitudeModeType = Union[None, str]
 
 
 class Normalize(AudioTransform):
-    realtime = True
     scriptable = True
 
     def __repr__(self):

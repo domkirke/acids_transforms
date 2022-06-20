@@ -127,7 +127,7 @@ class STFT(AudioTransform):
         return self.phase_buffer
 
     def realtime(self):
-        return RealtimeSTFT(sr=self.sr, n_fft=self.n_fft, hop_length=self.hop_length)
+        return RealtimeSTFT(sr=self.sr, n_fft=self.n_fft.item(), hop_length=self.hop_length.item())
 
     def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
         window = self.inv_window[:self.n_fft.item()]

@@ -34,7 +34,14 @@ def test_forward(test_files, transform: AudioTransform):
     y = transform.test_forward(raw)
     y, time = transform.test_forward(raw, time)
 
-
+@pytest.mark.parametrize("transform", get_audio_transforms())
+def test_realtime(test_files, transform: AudioTransform):
+    transform = transform()
+    raw, name = test_files
+    time = torch.zeros(raw.shape[:-1])
+    realtime_transform = transform.realtime()
+    realtime_transform.test_forward(raw, time)
+    
 @pytest.mark.parametrize("transform", get_invertible_transforms())
 def test_inversion(test_files, transform: AudioTransform):
     if not os.path.isdir("test/reconstructions"):
@@ -92,3 +99,4 @@ def test_combinations(test_files, transform):
         torchaudio.save(
             f"test/reconstructions/{names[i]}_{transform_name}.wav", x_tmp, sample_rate=44100)
     return True
+

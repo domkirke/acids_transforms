@@ -70,7 +70,6 @@ class _Representation(AudioTransform):
 
 
 class Real(_Representation):
-    realtime = True
 
     def __repr__(self):
         return "Real(norm=%s)" % self.norm.mode
@@ -98,7 +97,6 @@ class Real(_Representation):
 
 
 class Imaginary(_Representation):
-    realtime = True
 
     def __repr__(self):
         return "Imaginary(norm=%s)" % self.norm.mode
@@ -242,7 +240,6 @@ class Magnitude(_Representation):
 
 
 class Phase(_Representation):
-    realtime = True
 
     def __repr__(self):
         return "Phase(norm=%s)" % self.norm.mode
@@ -445,7 +442,6 @@ class SpectralRepresentation(AudioTransform):
 
 
 class Cartesian(SpectralRepresentation):
-    realtime=True
 
     def __repr__(self):
         return "Cartesian(real_norm=%s, imag_norm=%s)" % (self.magnitude.norm.mode, self.phase.norm.mode)
@@ -470,7 +466,6 @@ class Cartesian(SpectralRepresentation):
 
 
 class Polar(SpectralRepresentation):
-    realtime=True
 
     def __repr__(self):
         return "Polar(real_norm=%s, imag_norm=%s)" % (self.magnitude.norm.mode, self.phase.norm.mode)
@@ -481,7 +476,6 @@ class Polar(SpectralRepresentation):
 
 
 class PolarIF(SpectralRepresentation):
-    realtime=True
 
     def __repr__(self):
         return "PolarIF(real_norm=%s, imag_norm=%s)" % (self.magnitude.norm.mode, self.phase.norm.mode)
