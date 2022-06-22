@@ -20,12 +20,13 @@ class Dummy(AudioTransform):
 
 class _Representation(AudioTransform):
 
-    def __init__(self, sr: int = 44100, mode: Union[str, None] = "unipolar"):
+    def __init__(self, sr: int = 44100, mode: Union[str, None] = "unipolar", keep_nyquist: bool = True):
         super().__init__(sr=sr)
         if mode is not None:
             self.norm = Normalize(mode)
         else:
             self.norm = Dummy()
+        self.keep_nyquist = keep_nyquist
 
     @property
     def scriptable(self):
@@ -45,7 +46,12 @@ class _Representation(AudioTransform):
 
     @torch.jit.export
     def invert(self, x, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
-        return self.norm.invert(x)
+        out = self.norm.invert(x)
+        if not self.keep_nyquist:
+            pad_size = out.shape[:-1] + torch.Size([1])
+            pad_tensor = torch.zeros(pad_size, device=out.device, dtype=out.dtype)
+            out = torch.cat([out, pad_tensor], -1)
+        return out
 
     @classmethod
     def test_scripted_transform(cls, transform, invert: bool = True):
@@ -76,6 +82,8 @@ class Real(_Representation):
 
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.keep_nyquist:
+            x = x[..., 1:]
         return self.norm(x.real)
 
     @torch.jit.export
@@ -104,9 +112,12 @@ class Imaginary(_Representation):
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if torch.is_complex(x):
-            return self.norm(x.imag)
+            x = self.norm(x.imag)
         else:
-            return torch.zeros_like(x)
+            x =  torch.zeros_like(x)
+        if not self.keep_nyquist:
+            x = x[..., 1:]
+        return x
 
     @torch.jit.export
     def scale_data(self, x: torch.Tensor) -> None:
@@ -144,7 +155,8 @@ class Magnitude(_Representation):
                  mel: bool = True,
                  n_fft: int = 1024,
                  dtype: torch.dtype = None,
-                 eps: float = None):
+                 eps: float = None,
+                 keep_nyquist: bool = True):
         super().__init__(mode)
         self.contrast_mode = contrast
         self.mel = mel
@@ -154,6 +166,7 @@ class Magnitude(_Representation):
         if eps is None:
             eps = torch.finfo(dtype).eps
         self.register_buffer("eps", torch.tensor(eps))
+        self.keep_nyquist = keep_nyquist
         # make mel bank
         assert sr is not None
         assert n_fft is not None
@@ -208,11 +221,17 @@ class Magnitude(_Representation):
                 mag = mag[0]
         mag = self.contrast(mag)
         mag = self.norm(mag)
+        if not self.keep_nyquist:
+            mag = mag[..., 1:]
         return mag
 
     @torch.jit.export
     def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
         mag = self.norm.invert(x)
+        if not self.keep_nyquist:
+            pad_size = mag.shape[:-1] + torch.Size([1])
+            pad_tensor = torch.zeros(pad_size, device=mag.device, dtype=mag.dtype)
+            mag = torch.cat([mag, pad_tensor], -1)
         mag = self.invert_contrast(mag)
         if self.mel:
             mag = torch.matmul(mag, self.inverse_mel_bank)
@@ -246,7 +265,10 @@ class Phase(_Representation):
 
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.norm(x.angle())
+        x = self.norm(x.angle())
+        if not self.keep_nyquist:
+            x = x[..., 1:]
+        return x
 
     @torch.jit.export
     def scale_data(self, x: torch.Tensor) -> None:
@@ -272,11 +294,12 @@ class IF(_Representation):
     def __repr__(self):
         return "IF(method=%s, norm=%s)" % (self.method, self.norm.mode)
 
-    def __init__(self, sr: int = 44100, mode: Union[str, None] = "gaussian", method: Union[str, None] = "forward", weighted=False):
+    def __init__(self, sr: int = 44100, mode: Union[str, None] = "gaussian", method: Union[str, None] = "forward", weighted=False, keep_nyquist:bool = True):
         super().__init__(sr=sr, mode=mode)
         self.method = method
         self.weighted = weighted
         self.weighted_window = torch.zeros(0, 0)
+        self.keep_nyquist = keep_nyquist
         self.register_buffer("eps", torch.tensor(
             torch.finfo(torch.float32).eps))
 
@@ -318,7 +341,10 @@ class IF(_Representation):
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         inst_f = self.get_if(x)
-        return self.norm(inst_f)
+        inst_f = self.norm(inst_f)
+        if not self.keep_nyquist:
+            inst_f = inst_f[..., 1:]
+        return inst_f
 
     @torch.jit.export
     def invert(self, x, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
@@ -332,6 +358,10 @@ class IF(_Representation):
         elif self.method == "central":
             x_denorm[..., 1:-1, :] *= (2 * torch.pi)
             x_denorm=fint_central(x_denorm)
+        if not self.keep_nyquist:
+            pad_size = x_denorm.shape[:-1] + torch.Size([1])
+            pad_tensor = torch.zeros(pad_size, device=x_denorm.device, dtype=x_denorm.dtype)
+            x_denorm = torch.cat([x_denorm, pad_tensor], -1)
         return x_denorm
 
     def test_inversion(self, x: torch.Tensor):
@@ -372,13 +402,15 @@ class SpectralRepresentation(AudioTransform):
 
     def __init__(self, sr: int=44100,
                  magnitude_transform=None, phase_transform=None,
-                 magnitude_mode="unipolar", phase_mode="gaussian", stack=-2):
+                 magnitude_mode="unipolar", phase_mode="gaussian", stack=-2,
+                 keep_nyquist: bool = True):
         super().__init__(sr=sr)
         if type(self) == SpectralRepresentation:
             raise RuntimeError(
                 "SpectralRepresentation should not be called directly.")
-        self.magnitude=magnitude_transform(sr=sr, mode=magnitude_mode)
-        self.phase=phase_transform(sr=sr, mode=phase_mode)
+        self.keep_nyquist=keep_nyquist
+        self.magnitude=magnitude_transform(sr=sr, mode=magnitude_mode, keep_nyquist=keep_nyquist)
+        self.phase=phase_transform(sr=sr, mode=phase_mode, keep_nyquist=keep_nyquist)
         self.stack=stack
 
     @ torch.jit.export
@@ -446,9 +478,9 @@ class Cartesian(SpectralRepresentation):
     def __repr__(self):
         return "Cartesian(real_norm=%s, imag_norm=%s)" % (self.magnitude.norm.mode, self.phase.norm.mode)
 
-    def __init__(self, sr: int=44100, real_mode="gaussian", imag_mode="gaussian", stack=-2):
+    def __init__(self, sr: int=44100, real_mode="gaussian", imag_mode="gaussian", stack=-2, keep_nyquist: bool = True):
         super(Cartesian, self).__init__(sr, Real, Imaginary,
-                                        real_mode, imag_mode, stack=stack)
+                                        real_mode, imag_mode, stack=stack, keep_nyquist=keep_nyquist)
 
     @ torch.jit.export
     def invert(self, x, inversion_mode: InversionEnumType=None, tolerance: float=1.e-4) -> torch.Tensor:
@@ -470,9 +502,9 @@ class Polar(SpectralRepresentation):
     def __repr__(self):
         return "Polar(real_norm=%s, imag_norm=%s)" % (self.magnitude.norm.mode, self.phase.norm.mode)
 
-    def __init__(self, sr: int=44100, magnitude_mode="unipolar", phase_mode="gaussian", stack=-2):
+    def __init__(self, sr: int=44100, magnitude_mode="unipolar", phase_mode="gaussian", stack=-2, keep_nyquist: bool = True):
         super(Polar, self).__init__(sr, Magnitude, Phase,
-                                    magnitude_mode, phase_mode, stack=stack)
+                                    magnitude_mode, phase_mode, stack=stack, keep_nyquist=keep_nyquist)
 
 
 class PolarIF(SpectralRepresentation):
@@ -480,9 +512,9 @@ class PolarIF(SpectralRepresentation):
     def __repr__(self):
         return "PolarIF(real_norm=%s, imag_norm=%s)" % (self.magnitude.norm.mode, self.phase.norm.mode)
 
-    def __init__(self, sr: int=44100, magnitude_mode="unipolar", phase_mode="gaussian", stack=-2):
+    def __init__(self, sr: int=44100, magnitude_mode="unipolar", phase_mode="gaussian", stack=-2, keep_nyquist: bool = True):
         super(PolarIF, self).__init__(sr, Magnitude, IF,
-                                      magnitude_mode, phase_mode, stack=stack)
+                                      magnitude_mode, phase_mode, stack=stack, keep_nyquist=keep_nyquist)
 
     def test_inversion(self, x: torch.Tensor):
         # reshape x in case

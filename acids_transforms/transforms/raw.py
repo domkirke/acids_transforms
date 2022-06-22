@@ -144,6 +144,9 @@ class Window(AudioTransform):
         chunks = frame(x, self.window_size, self.hop_size, self.dim)
         return chunks
 
+    @property
+    def ratio(self):
+        return self.hop_size.item()
 
     @torch.jit.export
     def forward_with_time(self, x: torch.Tensor, time: torch.Tensor):

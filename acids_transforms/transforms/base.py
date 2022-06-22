@@ -53,6 +53,10 @@ class AudioTransform(nn.Module):
     def realtime(self):
         return self
 
+    @property
+    def ratio(self):
+        return 1
+
     def test_forward(self, x: torch.Tensor, time: torch.Tensor = None):
         if time is None:
             return self.forward(x)
@@ -129,6 +133,13 @@ class ComposeAudioTransform(AudioTransform):
 
     def realtime(self):
         return ComposeAudioTransform(transforms=[t.realtime() for t in self.transforms], sr=self.sr)
+
+    @property
+    def ratio(self):
+        ratio = 1
+        for t in self.transforms:
+            ratio = ratio * t.ratio
+        return ratio
 
     @torch.jit.export
     def scale_data(self, x):

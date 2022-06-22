@@ -61,6 +61,10 @@ class MFCC(AudioTransform):
         if self.norm is not None:
             self.norm.scale_data(x)
 
+    @property
+    def ratio(self):
+        return self.n_fft.item()
+
     @torch.jit.export
     def forward(self, x: torch.Tensor):
         x_t = self.transform(x)

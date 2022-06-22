@@ -83,6 +83,10 @@ class STFT(AudioTransform):
     def _get_dual_window(self) -> torch.Tensor:
         return self._get_window()
 
+    @property
+    def ratio(self):
+        return self.hop_size.item()
+
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x, batch_shape = reshape_batches(x, -1)
@@ -195,7 +199,7 @@ class RealtimeSTFT(STFT):
         return False
 
     def __repr__(self):
-        repr_str = f"RealtimeSTFT(n_fft={self.n_fft}, hop_length={self.hop_length}" \
+        repr_str = f"RealtimeSTFT(n_fft={self.n_fft.item()}, hop_length={self.hop_length.item()}" \
                    f"inversion_mode = {self.inversion_mode})"
         return repr_str
 
@@ -221,7 +225,7 @@ class RealtimeSTFT(STFT):
             return x_rec
         else:
             inv_window = self.inv_window[:self.n_fft.item()]
-            return torch.fft.irfft(x) * inv_window.unsqueeze(0)
+            return torch.fft.irfft(x, norm="backward") * inv_window.unsqueeze(0)
 
     @torch.jit.export
     def get_batch_size(self, batch_size: int):

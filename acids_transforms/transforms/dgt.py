@@ -53,6 +53,10 @@ class DGT(STFT):
     def realtime(self):
         return RealtimeDGT(sr=self.sr, n_fft=self.n_fft.item(), hop_length=self.hop_length.item())
 
+    @property
+    def ratio(self):
+        return self.hop_size.item()
+
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x, batch_shape = reshape_batches(x, -1)
