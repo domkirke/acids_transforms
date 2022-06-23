@@ -280,7 +280,7 @@ class RealtimeDGT(DGT):
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         window = self.window[:self.n_fft.item()]
-        x_dgt = torch.fft.rfft(x * window.unsqueeze(0))
+        x_dgt = torch.fft.rfft(x * window)
         self._replace_phase_buffer(x_dgt.angle())
         return x_dgt
 
@@ -295,7 +295,7 @@ class RealtimeDGT(DGT):
             return x_rec
         else:
             inv_window = self.inv_window[:self.n_fft.item()]
-            return torch.fft.irfft(x) * inv_window.unsqueeze(0)
+            return torch.fft.irfft(x) * inv_window
 
     def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = "pghi", tolerance: float = 1.e-2) -> torch.Tensor:
         batch_size = x.shape[:-1]

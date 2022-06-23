@@ -211,7 +211,7 @@ class RealtimeSTFT(STFT):
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         window = self.window[:self.n_fft.item()]
-        x_fft = torch.fft.rfft(x * window.unsqueeze(0))
+        x_fft = torch.fft.rfft(x * window)
         self._replace_phase_buffer(x_fft.angle())
         return x_fft
     
@@ -226,7 +226,7 @@ class RealtimeSTFT(STFT):
             return x_rec
         else:
             inv_window = self.inv_window[:self.n_fft.item()]
-            return torch.fft.irfft(x, norm="backward") * inv_window.unsqueeze(0)
+            return torch.fft.irfft(x, norm="backward") * inv_window
 
     @torch.jit.export
     def get_batch_size(self, batch_size: int):
@@ -250,7 +250,7 @@ class RealtimeSTFT(STFT):
                              self.inversion_mode)
         x = x * torch.exp(phase * torch.full(phase.shape,
                                              1j, device=phase.device))
-        return torch.fft.irfft(x) * window.unsqueeze(0)
+        return torch.fft.irfft(x) * window
 
     # TESTS
     def test_forward(self, x: torch.Tensor, time: torch.Tensor = None):

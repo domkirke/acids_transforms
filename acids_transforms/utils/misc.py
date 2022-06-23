@@ -74,12 +74,10 @@ def fdiff_backward(x):
     inst_f = inst_f.flip(-2)
     return inst_f
 
-
 def fdiff_central(x):
     inst_f = torch.cat([x[..., 0, :].unsqueeze(-2), (x[..., 2:, :] -
                                                      x[..., :-2, :])/4, x[..., -1, :].unsqueeze(-2)], dim=-2)
     return inst_f
-
 
 def fint_forward(x):
     out = x
