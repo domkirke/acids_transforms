@@ -1,3 +1,4 @@
+from sympy import reshape
 import torch
 import math
 from enum import Enum
@@ -51,7 +52,8 @@ class DGT(STFT):
             raise ValueError("Inversion mode %s not known" % inversion_mode)
 
     def realtime(self):
-        return RealtimeDGT(sr=self.sr, n_fft=self.n_fft.item(), hop_length=self.hop_length.item())
+        inversion_mode = self.inversion_mode if self.inversion_mode in RealtimeDGT.get_inversion_modes() else "pghi"
+        return RealtimeDGT(sr=self.sr, n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), inversion_mode = inversion_mode)
 
     @property
     def ratio(self):
@@ -297,6 +299,9 @@ class RealtimeDGT(DGT):
             return torch.fft.irfft(x) * inv_window.unsqueeze(0)
 
     def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = "pghi", tolerance: float = 1.e-2) -> torch.Tensor:
+        batch_size = x.shape[:-1]
+        if batch_size != self.batch_size:
+            self.reset(batch_size)
         window = self.inv_window[:self.n_fft.item()]
         phase = torch.tensor(0)
         if inversion_mode is None:
