@@ -123,8 +123,8 @@ class Transpose(AudioTransform):
 
     def __init__(self, dims=(-2, -1), contiguous=True):
         super(Transpose, self).__init__()
-        self.dims = dims
-        self.contiguous = contiguous
+        self.dims = list(dims)
+        self.contiguous = bool(contiguous)
 
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
