@@ -317,7 +317,7 @@ class RealtimeDGT(DGT):
         x = x * torch.exp(phase * torch.full(phase.shape,
                                              1j, device=phase.device))
         self.update_buffers(x)
-        return torch.fft.irfft(x) * window.unsqueeze(0)
+        return torch.fft.irfft(x) * window
 
     def update_buffers(self, x):
         self.hgi_mag_buffer = torch.stack(
