@@ -63,7 +63,7 @@ class MFCC(AudioTransform):
 
     @property
     def ratio(self):
-        return self.n_fft.item()
+        return self.hop_length
 
     @torch.jit.export
     def forward(self, x: torch.Tensor):

@@ -85,7 +85,7 @@ class STFT(AudioTransform):
 
     @property
     def ratio(self):
-        return self.hop_size.item()
+        return self.hop_length.item()
 
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
