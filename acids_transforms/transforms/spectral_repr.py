@@ -20,7 +20,7 @@ class Dummy(AudioTransform):
 
 class _Representation(AudioTransform):
 
-    def __init__(self, sr: int = 44100, mode: Union[str, None] = "unipolar", keep_nyquist: bool = True):
+    def __init__(self, sr: int = 44100, mode: Union[str, None] = None, keep_nyquist: bool = True):
         super().__init__(sr=sr)
         if mode is not None:
             self.norm = Normalize(mode)
