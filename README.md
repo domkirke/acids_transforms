@@ -12,6 +12,7 @@ MuLaw | yes | yes
 Window | yes | yes
 Mono | yes | yes
 Stereo | yes | yes
+MidSide | yes | yes
 OneHot | yes | yes
 **spectral**
 STFT / RealtimeSTFT  | yes | yes
@@ -24,6 +25,7 @@ Instantaneous Frequency | yes | yes
 **normalization**
 Normalize | yes | yes
 **miscalleneous**
+OverlapAdd | yes | yes
 Squeeze | yes | yes
 Unsqueeze | yes | yes
 Transpose | yes | yes
