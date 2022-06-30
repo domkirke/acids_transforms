@@ -23,6 +23,8 @@ class OverlapAdd(AudioTransform):
         self.register_buffer("hop_length", torch.tensor(hop_length))
         frames_out = (self.n_fft // self.hop_length - 1).item()
         self.register_buffer("causal_buffer", torch.zeros(frames_out * self.hop_length.item()))
+        self.register_buffer("gain_compensation", torch.tensor(1.))
+        self.gain_compensation = 1 / self.invert(torch.ones(12, self.n_fft)).max()
 
     def get_causal_buffer(self, x: torch.Tensor):
         shape = x.shape
@@ -67,4 +69,4 @@ class OverlapAdd(AudioTransform):
         out = torch.zeros(out_size)
         for i in range(x.size(-2)):
             out[..., i * hop_length : i* hop_length + n_fft] += x[..., i, :] / (overlap / 2)
-        return out[..., frames_out * hop_length: -(frames_out * hop_length)]
+        return out[..., frames_out * hop_length: -(frames_out * hop_length)] * self.gain_compensation
