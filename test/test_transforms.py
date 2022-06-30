@@ -25,7 +25,6 @@ def get_invertible_transforms():
     audio_transforms = list(filter(lambda x: x().invertible, audio_transforms))
     return audio_transforms
 
-
 @pytest.mark.parametrize("transform", get_audio_transforms())
 def test_forward(test_files, transform: AudioTransform):
     transform = transform()

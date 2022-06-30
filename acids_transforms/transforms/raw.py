@@ -1,11 +1,11 @@
-import torch
+import torch, math
 import torchaudio
 from .base import AudioTransform, InversionEnumType
 from ..utils.misc import frame
 from typing import Dict
 
 
-__all__ = ['Mono', 'Stereo', 'Window', 'MuLaw']
+__all__ = ['Mono', 'Stereo', 'MidSide', 'Window', 'MuLaw']
 
 
 class Mono(AudioTransform):
@@ -99,16 +99,84 @@ class Stereo(AudioTransform):
 
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if x.shape[0] == 1:
-            x = torch.cat([x, x], dim=0)
+        if x.ndim == 1:
+            x = torch.stack([x, x], dim=0)
+        else:
+            if x.shape[-2] == 1:
+                x = torch.cat([x, x], dim=-2)
+            elif x.shape[-2] > 2:
+                raise Exception("Stereo only works with 1/2 channels")
         if self.normalize:
             x = x / x.max()
         return x
 
     @torch.jit.export
     def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
-        if x.shape[0] == 1:
-            x = torch.cat([x, x], dim=0)
+        if x.ndim == 1:
+            x = torch.stack([x, x], dim=0)
+        else:
+            if x.shape[-2] == 1:
+                x = torch.cat([x, x], dim=-2)
+            elif x.shape[-2] > 2:
+                x = x[..., :2, :]
+        return x
+
+class MidSide(AudioTransform):
+    @property
+    def scriptable(self):
+        return True
+
+    @property
+    def invertible(self):
+        return True
+
+    @property
+    def needs_scaling(self):
+        return False
+
+    def __init__(self,  sr=44100, normalize=False, pad_mid=True):
+        super().__init__(sr=sr)
+        self.pad_mid = pad_mid
+        self.normalize = normalize
+
+    def __repr__(self):
+        return "MidSide(normalize=%s)" % self.normalize
+
+    @torch.jit.export
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim == 1:
+            x = torch.stack([x, torch.zeros_like(x)], dim=0)
+        else:
+            if x.shape[-2] == 1:
+                x = torch.cat([x, torch.zeros_like(x)], dim=-2)
+            elif x.shape[-2] > 2:
+                raise Exception("MidSide only works with 1 or 2 channels")
+            else:
+                mid_signal = (x[..., 0, :] + x[..., 1, :])/2
+                side_signal = (x[..., 0, :] - x[..., 1, :])/2
+                if self.pad_mid:
+                    mid_signal = mid_signal / math.sqrt(2)
+                x = torch.stack([mid_signal, side_signal], -2)
+        if self.normalize:
+            x = x / x.max()
+        return x
+
+    @torch.jit.export
+    def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
+        if x.ndim == 1:
+            x = torch.stack([x, x], dim=0)
+        else:
+            if x.shape[-2] == 1:
+                x = torch.cat([x, x], dim=-2)
+            else:
+                x = x[..., :2, :]
+                mid_signal = x[..., 0, :]
+                side_signal = x[..., 1, :]
+                if self.pad_mid:
+                    mid_signal = mid_signal * math.sqrt(2)
+                left_signal = mid_signal + side_signal
+                right_signal = mid_signal - side_signal
+                x = torch.stack([left_signal, right_signal], dim=-2)
         return x
 
 

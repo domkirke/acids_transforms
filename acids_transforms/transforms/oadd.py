@@ -1,8 +1,23 @@
 import torch, torch.nn as nn
+
+from acids_transforms.transforms.base import AudioTransform
 from ..utils import frame
 
-class OverlapAdd(nn.Module):
-    def __init__(self, n_fft, hop_length, dim:int = -1) -> None:
+class OverlapAdd(AudioTransform):
+
+    @property
+    def invertible(self):
+        return True
+        
+    @property
+    def scriptable(self):
+        return True
+
+    @property
+    def needs_scaling(self):
+        return False
+    
+    def __init__(self, n_fft: int = 2048, hop_length: int = 256, dim:int = -1) -> None:
         super().__init__()
         self.register_buffer("n_fft", torch.tensor(n_fft))
         self.register_buffer("hop_length", torch.tensor(hop_length))
@@ -28,6 +43,19 @@ class OverlapAdd(nn.Module):
         x_framed = frame(x, self.n_fft.item(), self.hop_length.item(), dim=-1)
         return x_framed
     
+    @torch.jit.export
+    def forward_with_time(self, x: torch.Tensor, time: torch.Tensor):
+        transform = self.forward(x)
+        n_chunks = transform.size(-2)
+        shifts = torch.arange(n_chunks) * self.hop_length / self.sr
+        new_shape = [t for t in transform.shape[:-2]]
+        new_shape.append(n_chunks)
+        new_strides = [0] * (x.ndim-1)
+        new_strides.append(1)
+        shifts = shifts.as_strided(new_shape, new_strides)
+        new_time = shifts + time.unsqueeze(-1)
+        return transform, new_time
+
     @torch.jit.export
     def invert(self, x: torch.Tensor) -> torch.Tensor:
         n_fft = self.n_fft.item()
