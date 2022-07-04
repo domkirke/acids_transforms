@@ -150,7 +150,9 @@ def frame(tensor: torch.Tensor, wsize: int, hsize: int, dim: int):
         dim = tensor.ndim + dim
     if not tensor.is_contiguous():
         tensor = tensor.contiguous()
-    n_windows = tensor.shape[dim] // hsize
+    n_windows = (tensor.shape[dim] - wsize) // hsize
+    if tensor.shape[dim] >= (n_windows * hsize + wsize):
+        n_windows += 1
     tensor = pad(tensor, n_windows * hsize + wsize,  dim)
     shape = list(tensor.shape)
     shape[dim] = n_windows

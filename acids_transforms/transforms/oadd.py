@@ -24,30 +24,40 @@ class OverlapAdd(AudioTransform):
         super().__init__()
         self.register_buffer("n_fft", torch.tensor(n_fft))
         self.register_buffer("hop_length", torch.tensor(hop_length))
-        frames_out = (self.n_fft // self.hop_length - 1).item()
-        self.register_buffer("causal_buffer", torch.zeros(frames_out * self.hop_length.item()))
+        self.frames_out = (self.n_fft // self.hop_length - 1).item()
+        self.register_buffer("input_buffer", torch.zeros(self.frames_out * self.hop_length.item()))
+        self.register_buffer("output_buffer", torch.zeros(self.frames_out, self.n_fft.item()))
         self.register_buffer("gain_compensation", torch.tensor(1.))
-        self.gain_compensation = self.invert(self._forward_without_update(torch.ones(12, self.n_fft))).max()
+        self.gain_compensation = self.invert(self._forward_without_update(torch.ones(12, (self.frames_out+1) *self.n_fft))).max()
 
-    def get_causal_buffer(self, x: torch.Tensor):
+    def get_input_buffer(self, x: torch.Tensor):
         shape = x.shape
-        frames_out = (self.n_fft // self.hop_length - 1).item()
-        if self.causal_buffer.shape != shape:
+        if self.input_buffer.shape[:-1] != shape[:-1]:
             shape = shape[:-1]
-            shape = shape + torch.Size([int(frames_out * self.hop_length.item())])
-            causal_buffer = torch.zeros(shape)
+            shape = shape + torch.Size([int(self.frames_out * self.hop_length.item())])
+            input_buffer = torch.zeros(shape)
         else:
-            causal_buffer = self.causal_buffer.clone()
-        self.causal_buffer =  x[..., -(frames_out * self.hop_length.item()):]
-        return causal_buffer
+            input_buffer = self.input_buffer.clone()
+        self.input_buffer =  x[..., -(self.frames_out * self.hop_length.item()):]
+        return input_buffer
+
+    def get_output_buffer(self, x: torch.Tensor):
+        shape = x.shape
+        if self.output_buffer.shape[:-1] != shape[:-2]:
+            shape = shape[:-2]
+            shape = shape + torch.Size([int(self.frames_out * self.hop_length.item())])
+            output_buffer = torch.zeros(shape)
+        else:
+            output_buffer = self.output_buffer.clone()
+        return output_buffer
 
     def _forward_without_update(self, x: torch.Tensor) -> torch.Tensor:
         return frame(x, self.n_fft.item(), self.hop_length.item(), dim=-1)
 
     @torch.jit.export
     def forward(self, x: torch.Tensor)-> torch.Tensor:
-        causal_buffer = self.get_causal_buffer(x)
-        x = torch.cat([causal_buffer, x], dim=-1)
+        input_buffer = self.get_input_buffer(x)
+        x = torch.cat([input_buffer, x], dim=-1)
         x_framed = frame(x, self.n_fft.item(), self.hop_length.item(), dim=-1)
         return x_framed
     
@@ -70,11 +80,14 @@ class OverlapAdd(AudioTransform):
         # assert x.size(-1) % self.hop_length == 0, "input dim must be a factor of the hop length"
         n_fft = self.n_fft.item()
         hop_length = self.hop_length.item()
-        frames_out = int(n_fft / hop_length) - 1
         overlap = int(n_fft / hop_length)
         # perform overlap_add
+        output_buffer = self.get_output_buffer(x)
         out_size = x.shape[:-2] + torch.Size([int((x.size(-2)-1) * hop_length + n_fft)])
-        out = torch.zeros(out_size)
+        recompose_buffer = torch.cat([output_buffer, torch.zeros(out_size)], -1)
         for i in range(x.size(-2)):
-            out[..., i * hop_length : i* hop_length + n_fft] += x[..., i, :] / (overlap / 2)
-        return out[..., frames_out * hop_length: -(frames_out * hop_length)] / self.gain_compensation
+            i_shifted = i
+            recompose_buffer[..., i * hop_length : i_shifted * hop_length + n_fft] += x[..., i, :] / (overlap / 2)
+        out = recompose_buffer[..., :(overlap * hop_length)]
+        self.output_buffer = recompose_buffer[..., (overlap * hop_length):]
+        return out / self.gain_compensation
