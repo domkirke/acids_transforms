@@ -24,7 +24,7 @@ class OverlapAdd(AudioTransform):
         frames_out = (self.n_fft // self.hop_length - 1).item()
         self.register_buffer("causal_buffer", torch.zeros(frames_out * self.hop_length.item()))
         self.register_buffer("gain_compensation", torch.tensor(1.))
-        self.gain_compensation = self.invert(self(torch.ones(12, self.n_fft), update=False)).max()
+        self.gain_compensation = self.invert(self._forward_without_update(torch.ones(12, self.n_fft), update=False)).max()
 
     def get_causal_buffer(self, x: torch.Tensor):
         shape = x.shape
@@ -38,11 +38,13 @@ class OverlapAdd(AudioTransform):
         self.causal_buffer =  x[..., -(frames_out * self.hop_length.item()):]
         return causal_buffer
 
+    def _forward_without_update(self, x: torch.Tensor) -> torch.Tensor:
+        return frame(x, self.n_fft.item(), self.hop_length.item(), dim=-1)
+
     @torch.jit.export
-    def forward(self, x: torch.Tensor, update: bool = True) -> torch.Tensor:
-        if update:
-            causal_buffer = self.get_causal_buffer(x)
-            x = torch.cat([causal_buffer, x], dim=-1)
+    def forward(self, x: torch.Tensor)-> torch.Tensor:
+        causal_buffer = self.get_causal_buffer(x)
+        x = torch.cat([causal_buffer, x], dim=-1)
         x_framed = frame(x, self.n_fft.item(), self.hop_length.item(), dim=-1)
         return x_framed
     
