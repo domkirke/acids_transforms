@@ -24,7 +24,7 @@ class DGT_INVERSION_MODES(Enum):
 class DGT(STFT):
 
     def __repr__(self):
-        repr_str = f"DGT(n_fft={self.n_fft.item()}, hop_length={self.hop_length.item()}" \
+        repr_str = f"DGT(n_fft={self.n_fft.item()}, hop_length={self.hop_length.item()}, " \
                    f"inversion_mode = {self.inversion_mode})"
         return repr_str
 
@@ -248,7 +248,7 @@ class RealtimeDGT(DGT):
                              torch.zeros(*self.batch_size, n_fft//2+1))
 
     def __repr__(self):
-        repr_str = f"RealtimeDGT(n_fft={self.n_fft.item()}, hop_length={self.hop_length.item()}" \
+        repr_str = f"RealtimeDGT(n_fft={self.n_fft.item()}, hop_length={self.hop_length.item()}, " \
                    f"inversion_mode = {self.inversion_mode})"
         return repr_str
 

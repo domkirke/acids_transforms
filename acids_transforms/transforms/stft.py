@@ -25,7 +25,7 @@ class STFT(AudioTransform):
         return False
 
     def __repr__(self):
-        repr_str = f"STFT(n_fft={self.n_fft.item()}, hop_length={self.hop_length.item()}" \
+        repr_str = f"STFT(n_fft={self.n_fft.item()}, hop_length={self.hop_length.item()}, " \
                    f"inversion_mode = {self.inversion_mode})"
         return repr_str
 
@@ -131,7 +131,7 @@ class STFT(AudioTransform):
         return self.phase_buffer
 
     def realtime(self):
-        inversion_mode = self.inversion_mode if self.inversion_mode in RealtimeSTFT.get_inversion_modes() else "griffin_lim"
+        inversion_mode = self.inversion_mode if self.inversion_mode in RealtimeSTFT.get_inversion_modes() else "random"
         return RealtimeSTFT(sr=self.sr, n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), inversion_mode=inversion_mode)
 
     def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
@@ -200,7 +200,7 @@ class RealtimeSTFT(STFT):
         return False
 
     def __repr__(self):
-        repr_str = f"RealtimeSTFT(n_fft={self.n_fft.item()}, hop_length={self.hop_length.item()}" \
+        repr_str = f"RealtimeSTFT(n_fft={self.n_fft.item()}, hop_length={self.hop_length.item()}, " \
                    f"inversion_mode = {self.inversion_mode})"
         return repr_str
 

@@ -16,8 +16,11 @@ class OverlapAdd(AudioTransform):
     @property
     def needs_scaling(self):
         return False
+
+    def __repr__(self):
+        return "OverlapAdd(n_fft=%s, hop_length=%s)"%(self.n_fft.item(), self.hop_length.item())
     
-    def __init__(self, n_fft: int = 2048, hop_length: int = 256, dim:int = -1) -> None:
+    def __init__(self, n_fft: int = 1024, hop_length: int = 128, dim:int = -1) -> None:
         super().__init__()
         self.register_buffer("n_fft", torch.tensor(n_fft))
         self.register_buffer("hop_length", torch.tensor(hop_length))
@@ -50,7 +53,7 @@ class OverlapAdd(AudioTransform):
     
     @torch.jit.export
     def forward_with_time(self, x: torch.Tensor, time: torch.Tensor):
-        assert x.size(-1) % self.hop_length == 0, "input dim must be a factor of the hop length"
+        # assert x.size(-1) % self.hop_length == 0, "input dim must be a factor of the hop length"
         transform = self.forward(x)
         n_chunks = transform.size(-2)
         shifts = torch.arange(n_chunks) * self.hop_length / self.sr
@@ -63,8 +66,8 @@ class OverlapAdd(AudioTransform):
         return transform, new_time
 
     @torch.jit.export
-    def invert(self, x: torch.Tensor, inversion_mode: Union[str, None] = None) -> torch.Tensor:
-        assert x.size(-1) % self.hop_length == 0, "input dim must be a factor of the hop length"
+    def invert(self, x: torch.Tensor, inversion_mode: Union[str, None] = None, tolerance: Union[float, None] = None) -> torch.Tensor:
+        # assert x.size(-1) % self.hop_length == 0, "input dim must be a factor of the hop length"
         n_fft = self.n_fft.item()
         hop_length = self.hop_length.item()
         frames_out = int(n_fft / hop_length) - 1

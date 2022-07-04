@@ -72,7 +72,8 @@ combinations = {
     "stft+magnitude": transforms.STFT() + transforms.Magnitude(),
     # "scaled+dgt": 10.0 * transforms.DGT(),
     "stereo+mulaw+onehot": transforms.Stereo() + transforms.MuLaw(channels=256) + transforms.OneHot(n_classes=256),
-    "stft+polar": transforms.STFT() + transforms.Polar()
+    "stft+polar": transforms.STFT() + transforms.Polar(),
+    "overlap+stft": transforms.OverlapAdd() + transforms.RealtimeSTFT()
 }
 
 
@@ -84,10 +85,10 @@ def test_combinations(test_files, transform):
     transform_name = transform
     transform = combinations[transform]
     transform.realtime()
-    if transform.scriptable:
-        transform = torch.jit.script(transform)
     if transform.needs_scaling:
         transform.scale_data(raw)
+    # if transform.scriptable:
+    #     transform = torch.jit.script(transform)
     time = torch.zeros(*raw.shape[:-1])
     x_t, time = transform.forward_with_time(raw, time)
     if transform.invertible:
