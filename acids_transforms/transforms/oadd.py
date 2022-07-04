@@ -1,5 +1,5 @@
 import torch, torch.nn as nn
-
+from typing import Union
 from .base import AudioTransform
 from ..utils import frame
 
@@ -63,7 +63,7 @@ class OverlapAdd(AudioTransform):
         return transform, new_time
 
     @torch.jit.export
-    def invert(self, x: torch.Tensor) -> torch.Tensor:
+    def invert(self, x: torch.Tensor, inversion_mode: Union[str, None] = None) -> torch.Tensor:
         assert x.size(-1) % self.hop_length == 0, "input dim must be a factor of the hop length"
         n_fft = self.n_fft.item()
         hop_length = self.hop_length.item()
