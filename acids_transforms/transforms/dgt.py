@@ -28,7 +28,8 @@ class DGT(STFT):
                    f"inversion_mode = {self.inversion_mode})"
         return repr_str
 
-    def __init__(self, sr: int = 44100, n_fft: int = 1024, hop_length: int = 256, dtype: torch.dtype = None, inversion_mode: InversionEnumType = "pghi"):
+    def __init__(self, sr: int = 44100, n_fft: int = 1024, hop_length: int = 256, dtype: torch.dtype = None, 
+                 inversion_mode: InversionEnumType = "pghi", tolerance: float = 1.e-2):
         AudioTransform.__init__(self, sr)
         dtype = dtype or torch.get_default_dtype()
         self.register_buffer("n_fft", torch.zeros(1).long())
@@ -39,6 +40,7 @@ class DGT(STFT):
         self.register_buffer("eps",  torch.tensor(
             torch.finfo(dtype).eps, dtype=dtype))
         self.register_buffer("phase_buffer", torch.zeros(0))
+        self.register_buffer("tolerance", torch.tensor(tolerance))
         if (n_fft is not None):
             assert hop_length is not None, "n_fft and hop_length must be given together"
         if (hop_length is not None):
@@ -81,10 +83,10 @@ class DGT(STFT):
         return transform, new_time
 
     @torch.jit.export
-    def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-2) -> torch.Tensor:
+    def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = None) -> torch.Tensor:
         x, batch_shape = reshape_batches(x, -2)
         if not torch.is_complex(x):
-            x_inv = self.invert_without_phase(x, inversion_mode, tolerance)
+            x_inv = self.invert_without_phase(x, inversion_mode)
         else:
             window = self.inv_window[:self.n_fft.item()]
             x_inv = torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), window=window, onesided=True)
@@ -120,7 +122,7 @@ class DGT(STFT):
             gsynth[l] = self.window[l]/denom
         return gsynth
 
-    def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-2) -> torch.Tensor:
+    def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = None) -> torch.Tensor:
         window = self.inv_window[:self.n_fft.item()]
         phase = torch.tensor(0)
         if inversion_mode is None:
@@ -130,15 +132,15 @@ class DGT(STFT):
             if phase.shape[0] == 0:
                 phase = torch.pi * 2 * torch.rand_like(x)
         elif (inversion_mode == "griffin_lim"):
-            return self.griffin_lim(x, tolerance)
+            return self.griffin_lim(x)
         elif (inversion_mode == "pghi"):
             if x.ndim == 3:
                 phase_array = []
                 for n in range(x.shape[0]):
-                    phase_array.append(self.pghi(x[n], tolerance))
+                    phase_array.append(self.pghi(x[n], self.tolerance))
                 phase = torch.stack(phase_array)
             else:
-                phase = self.pghi(x, tolerance)
+                phase = self.pghi(x, self.tolerance)
         elif (inversion_mode == "random"):
             phase = torch.pi * 2 * torch.rand_like(x)
         else:
@@ -291,15 +293,15 @@ class RealtimeDGT(DGT):
         return self(x), time
 
     @torch.jit.export
-    def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = "pghi", tolerance: float = 1.e-2) -> torch.Tensor:
+    def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = "pghi") -> torch.Tensor:
         if not torch.is_complex(x):
-            x_rec = self.invert_without_phase(x, inversion_mode, tolerance)
+            x_rec = self.invert_without_phase(x, inversion_mode)
             return x_rec
         else:
             inv_window = self.inv_window[:self.n_fft.item()]
             return torch.fft.irfft(x) * inv_window
 
-    def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = "pghi", tolerance: float = 1.e-2) -> torch.Tensor:
+    def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = "pghi") -> torch.Tensor:
         batch_size = x.shape[:-1]
         if batch_size != self.batch_size:
             self.reset(batch_size)
@@ -312,7 +314,7 @@ class RealtimeDGT(DGT):
             if phase.shape[0] == 0:
                 phase = torch.pi * 2 * torch.rand_like(x)
         elif (inversion_mode == "pghi"):
-            phase = self.pghi(x, tolerance)
+            phase = self.pghi(x, self.tolerance)
         elif (inversion_mode == "random"):
             phase = torch.pi * 2 * torch.rand_like(x)
         else:

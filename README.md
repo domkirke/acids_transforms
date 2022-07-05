@@ -65,3 +65,7 @@ x_transformed = transform(x)
 x_inverted = transform.invert(x_transformed)
 torchaudio.save("additive_pghi.wav", x_inverted, sample_rate=sr)
 ```
+
+##### Warnings
+- on real-time PGHI : while pghi is usable with RealtimeDGT, there are some known issues with a stream use. This will come very soon!
+- this library is still experimental and changes very often. a first "sure" release will come soon!

@@ -110,10 +110,10 @@ class STFT(AudioTransform):
         return transform, new_time
 
     @torch.jit.export
-    def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
+    def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = None) -> torch.Tensor:
         x, batch_shape = reshape_batches(x, -2)
         if not torch.is_complex(x):
-            x_inv = self.invert_without_phase(x, inversion_mode, tolerance)
+            x_inv = self.invert_without_phase(x, inversion_mode)
         else:
             window = self.inv_window[:self.n_fft.item()]
             x_inv = torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(),
@@ -136,7 +136,7 @@ class STFT(AudioTransform):
         inversion_mode = self.inversion_mode if self.inversion_mode in RealtimeSTFT.get_inversion_modes() else "random"
         return RealtimeSTFT(sr=self.sr, n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), inversion_mode=inversion_mode)
 
-    def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4) -> torch.Tensor:
+    def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = None) -> torch.Tensor:
         window = self.inv_window[:self.n_fft.item()]
         if inversion_mode is None:
             inversion_mode = self.inversion_mode
@@ -150,7 +150,7 @@ class STFT(AudioTransform):
                 x = x * torch.exp(phase * 1j)
                 return torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), window=window, onesided=True)
         if (inversion_mode == "griffin_lim"):
-            x_inv = self.griffin_lim(x, tolerance)
+            x_inv = self.griffin_lim(x)
             return x_inv
         elif (inversion_mode == "random"):
             phase = torch.pi * 2 * torch.rand_like(x)
@@ -159,7 +159,7 @@ class STFT(AudioTransform):
         else:
             raise ValueError("inversion mode %s not valid." % inversion_mode)
 
-    def griffin_lim(self, x: torch.Tensor, tolerance: float) -> torch.Tensor:
+    def griffin_lim(self, x: torch.Tensor) -> torch.Tensor:
         n_fft = self.n_fft.item()
         hop_length = self.hop_length.item()
         window = self.inv_window[:n_fft]
@@ -227,9 +227,9 @@ class RealtimeSTFT(STFT):
         return self(x), time
 
     @torch.jit.export
-    def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-6) -> torch.Tensor:
+    def invert(self, x: torch.Tensor, inversion_mode: InversionEnumType = None) -> torch.Tensor:
         if not torch.is_complex(x):
-            x_rec = self.invert_without_phase(x, tolerance, inversion_mode)
+            x_rec = self.invert_without_phase(x, inversion_mode)
             return x_rec
         else:
             inv_window = self.inv_window[:self.n_fft.item()]
@@ -243,7 +243,7 @@ class RealtimeSTFT(STFT):
     def set_batch_size(self, batch_size: int):
         self.batch_size = batch_size
 
-    def invert_without_phase(self, x: torch.Tensor, tolerance: float, inversion_mode: InversionEnumType = None) -> torch.Tensor:
+    def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = None) -> torch.Tensor:
         window = self.inv_window[:self.n_fft.item()]
         if inversion_mode is None:
             inversion_mode = self.inversion_mode

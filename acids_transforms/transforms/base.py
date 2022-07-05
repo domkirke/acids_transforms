@@ -160,9 +160,9 @@ class ComposeAudioTransform(AudioTransform):
         return x, time
 
     @torch.jit.export
-    def invert(self, x, inversion_mode: InversionEnumType = None, tolerance: float = 1.e-4):
+    def invert(self, x, inversion_mode: InversionEnumType = None):
         for t in self.transforms[::-1]:
-            x = t.invert(x, inversion_mode=inversion_mode, tolerance=tolerance)
+            x = t.invert(x, inversion_mode=inversion_mode) 
         return x
 
     def get_inversion_modes(self, idx):
