@@ -38,7 +38,7 @@ class DGT(STFT):
         self.register_buffer("gamma", torch.zeros(1))
         self.register_buffer("eps",  torch.tensor(
             torch.finfo(dtype).eps, dtype=dtype))
-        self.phase_buffer = torch.zeros(0)
+        self.register_buffer("phase_buffer", torch.zeros(0))
         if (n_fft is not None):
             assert hop_length is not None, "n_fft and hop_length must be given together"
         if (hop_length is not None):
@@ -127,6 +127,8 @@ class DGT(STFT):
             inversion_mode = self.inversion_mode
         if (inversion_mode == "keep_input"):
             phase = self._get_phase_buffer()
+            if phase.shape[0] == 0:
+                phase = torch.pi * 2 * torch.rand_like(x)
         elif (inversion_mode == "griffin_lim"):
             return self.griffin_lim(x, tolerance)
         elif (inversion_mode == "pghi"):
@@ -307,6 +309,8 @@ class RealtimeDGT(DGT):
             inversion_mode = self.inversion_mode
         if (inversion_mode == "keep_input"):
             phase = self._get_phase_buffer()
+            if phase.shape[0] == 0:
+                phase = torch.pi * 2 * torch.rand_like(x)
         elif (inversion_mode == "pghi"):
             phase = self.pghi(x, tolerance)
         elif (inversion_mode == "random"):

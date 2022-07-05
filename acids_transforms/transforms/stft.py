@@ -2,7 +2,7 @@ import torch
 from torchaudio.functional import griffinlim
 import math
 from .base import AudioTransform, InversionEnumType
-from typing import Dict
+from typing import Dict, Union
 from ..utils.misc import *
 
 __all__ = ['STFT', 'RealtimeSTFT']
@@ -45,7 +45,7 @@ class STFT(AudioTransform):
         self.register_buffer("gamma", torch.zeros(1))
         self.register_buffer("eps",  torch.tensor(
             torch.finfo(dtype).eps, dtype=dtype))
-        self.phase_buffer = torch.zeros(0)
+        self.register_buffer("phase_buffer", torch.zeros(0))
 
         # set up window
         if hasattr(torch, f"{window}_window"):
@@ -128,7 +128,9 @@ class STFT(AudioTransform):
         self.phase_buffer = phase
 
     def _get_phase_buffer(self) -> torch.Tensor:
-        return self.phase_buffer
+        phase_buffer = self.phase_buffer
+        self.phase_buffer = torch.zeros(0)
+        return phase_buffer
 
     def realtime(self):
         inversion_mode = self.inversion_mode if self.inversion_mode in RealtimeSTFT.get_inversion_modes() else "random"
@@ -140,9 +142,14 @@ class STFT(AudioTransform):
             inversion_mode = self.inversion_mode
         if (inversion_mode == "keep_input"):
             phase = self._get_phase_buffer()
-            x = x * torch.exp(phase * 1j)
-            return torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), window=window, onesided=True)
-        elif (inversion_mode == "griffin_lim"):
+            if phase.shape[0] == 0:
+                phase = torch.pi * 2 * torch.rand_like(x)
+                x = x * torch.exp(phase * 1j)
+                return torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), window=window, onesided=True)
+            else:
+                x = x * torch.exp(phase * 1j)
+                return torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), window=window, onesided=True)
+        if (inversion_mode == "griffin_lim"):
             x_inv = self.griffin_lim(x, tolerance)
             return x_inv
         elif (inversion_mode == "random"):
@@ -240,14 +247,15 @@ class RealtimeSTFT(STFT):
         window = self.inv_window[:self.n_fft.item()]
         if inversion_mode is None:
             inversion_mode = self.inversion_mode
-        phase = torch.tensor(0)
         if (inversion_mode == "keep_input"):
             phase = self._get_phase_buffer()
+            if phase.shape[0] == 0:
+                phase = torch.pi * 2 * torch.rand_like(x)
         elif (inversion_mode == "random"):
             phase = torch.pi * 2 * torch.rand_like(x)
         else:
             raise ValueError("inversion mode %s not valid." %
-                             self.inversion_mode)
+                    self.inversion_mode)
         x = x * torch.exp(phase * torch.full(phase.shape,
                                              1j, device=phase.device))
         return torch.fft.irfft(x) * window
