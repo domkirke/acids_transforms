@@ -127,9 +127,12 @@ class STFT(AudioTransform):
     def _replace_phase_buffer(self, phase: torch.Tensor) -> None:
         self.phase_buffer = phase
 
-    def _get_phase_buffer(self) -> torch.Tensor:
-        phase_buffer = self.phase_buffer
-        # self.phase_buffer = torch.zeros(0)
+    def _get_phase_buffer(self, mag: torch.Tensor) -> torch.Tensor:
+        if mag.shape[:-2] != self.phase_buffer.shape[:-2]:
+            phase_buffer = torch.tensor(0)
+            self.phase_buffer = phase_buffer
+        else:
+            phase_buffer = self.phase_buffer
         return phase_buffer
 
     def realtime(self):
@@ -141,7 +144,7 @@ class STFT(AudioTransform):
         if inversion_mode is None:
             inversion_mode = self.inversion_mode
         if (inversion_mode == "keep_input"):
-            phase = self._get_phase_buffer()
+            phase = self._get_phase_buffer(x)
             if phase.shape[0] == 0:
                 phase = torch.pi * 2 * torch.rand_like(x)
                 x = x * torch.exp(phase * 1j)
@@ -248,7 +251,7 @@ class RealtimeSTFT(STFT):
         if inversion_mode is None:
             inversion_mode = self.inversion_mode
         if (inversion_mode == "keep_input"):
-            phase = self._get_phase_buffer()
+            phase = self._get_phase_buffer(x)
             if phase.shape[0] == 0:
                 phase = torch.pi * 2 * torch.rand_like(x)
         elif (inversion_mode == "random"):

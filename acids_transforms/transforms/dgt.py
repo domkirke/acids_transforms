@@ -128,7 +128,7 @@ class DGT(STFT):
         if inversion_mode is None:
             inversion_mode = self.inversion_mode
         if (inversion_mode == "keep_input"):
-            phase = self._get_phase_buffer()
+            phase = self._get_phase_buffer(x)
             if phase.shape[0] == 0:
                 phase = torch.pi * 2 * torch.rand_like(x)
         elif (inversion_mode == "griffin_lim"):
@@ -310,7 +310,7 @@ class RealtimeDGT(DGT):
         if inversion_mode is None:
             inversion_mode = self.inversion_mode
         if (inversion_mode == "keep_input"):
-            phase = self._get_phase_buffer()
+            phase = self._get_phase_buffer(x)
             if phase.shape[0] == 0:
                 phase = torch.pi * 2 * torch.rand_like(x)
         elif (inversion_mode == "pghi"):
