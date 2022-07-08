@@ -129,7 +129,7 @@ class STFT(AudioTransform):
 
     def _get_phase_buffer(self) -> torch.Tensor:
         phase_buffer = self.phase_buffer
-        self.phase_buffer = torch.zeros(0)
+        # self.phase_buffer = torch.zeros(0)
         return phase_buffer
 
     def realtime(self):
