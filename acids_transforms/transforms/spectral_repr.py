@@ -402,15 +402,15 @@ class SpectralRepresentation(AudioTransform):
 
     def __init__(self, sr: int=44100,
                  magnitude_transform=None, phase_transform=None,
-                 magnitude_mode="unipolar", phase_mode="gaussian", stack=-2,
+                 magnitude_args={}, phase_args={}, stack=-2,
                  keep_nyquist: bool = True):
         super().__init__(sr=sr)
         if type(self) == SpectralRepresentation:
             raise RuntimeError(
                 "SpectralRepresentation should not be called directly.")
         self.keep_nyquist=keep_nyquist
-        self.magnitude=magnitude_transform(sr=sr, mode=magnitude_mode, keep_nyquist=keep_nyquist)
-        self.phase=phase_transform(sr=sr, mode=phase_mode, keep_nyquist=keep_nyquist)
+        self.magnitude=magnitude_transform(sr=sr, **magnitude_args, keep_nyquist=keep_nyquist)
+        self.phase=phase_transform(sr=sr, **phase_args, keep_nyquist=keep_nyquist)
         self.stack=stack
 
     @ torch.jit.export
@@ -478,9 +478,10 @@ class Cartesian(SpectralRepresentation):
     def __repr__(self):
         return "Cartesian(real_norm=%s, imag_norm=%s)" % (self.magnitude.norm.mode, self.phase.norm.mode)
 
-    def __init__(self, sr: int=44100, real_mode="gaussian", imag_mode="gaussian", stack=-2, keep_nyquist: bool = True):
+    def __init__(self, sr: int=44100, real_args={"mode":"gaussian"}, imag_args={"mode":"gaussian"},
+                 stack=-2, keep_nyquist: bool = True):
         super(Cartesian, self).__init__(sr, Real, Imaginary,
-                                        real_mode, imag_mode, stack=stack, keep_nyquist=keep_nyquist)
+                                        real_args, imag_args, stack=stack, keep_nyquist=keep_nyquist)
 
     @ torch.jit.export
     def invert(self, x, inversion_mode: InversionEnumType=None, tolerance: float=1.e-4) -> torch.Tensor:
@@ -502,9 +503,13 @@ class Polar(SpectralRepresentation):
     def __repr__(self):
         return "Polar(real_norm=%s, imag_norm=%s)" % (self.magnitude.norm.mode, self.phase.norm.mode)
 
-    def __init__(self, sr: int=44100, magnitude_mode="unipolar", phase_mode="gaussian", stack=-2, keep_nyquist: bool = True):
+    def __init__(self,
+                 sr: int=44100,
+                 magnitude_args = {"mode":"bipolar"},
+                 phase_args = {"mode":"bipolar"},
+                 stack=-2, keep_nyquist: bool = True):
         super(Polar, self).__init__(sr, Magnitude, Phase,
-                                    magnitude_mode, phase_mode, stack=stack, keep_nyquist=keep_nyquist)
+                                    magnitude_args, phase_args, stack=stack, keep_nyquist=keep_nyquist)
 
 
 class PolarIF(SpectralRepresentation):
@@ -512,9 +517,14 @@ class PolarIF(SpectralRepresentation):
     def __repr__(self):
         return "PolarIF(real_norm=%s, imag_norm=%s)" % (self.magnitude.norm.mode, self.phase.norm.mode)
 
-    def __init__(self, sr: int=44100, magnitude_mode="unipolar", phase_mode="gaussian", stack=-2, keep_nyquist: bool = True):
+    def __init__(self,
+                 sr: int=44100,
+                 magnitude_args = {"mode":"bipolar"},
+                 phase_args = {"mode":"bipolar"},
+                 stack=-2, 
+                 keep_nyquist: bool = True):
         super(PolarIF, self).__init__(sr, Magnitude, IF,
-                                      magnitude_mode, phase_mode, stack=stack, keep_nyquist=keep_nyquist)
+                                      magnitude_args, phase_args, stack=stack, keep_nyquist=keep_nyquist)
 
     def test_inversion(self, x: torch.Tensor):
         # reshape x in case
