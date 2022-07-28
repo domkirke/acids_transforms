@@ -22,10 +22,10 @@ class _Representation(AudioTransform):
 
     def __init__(self, sr: int = 44100, mode: Union[str, None] = None, keep_nyquist: bool = True):
         super().__init__(sr=sr)
-        if mode is not None:
-            self.norm = Normalize(mode)
-        else:
+        if (mode is None) or (mode == "none"):
             self.norm = Dummy()
+        else:
+            self.norm = Normalize(mode)
         self.keep_nyquist = keep_nyquist
 
     @property
@@ -157,7 +157,7 @@ class Magnitude(_Representation):
                  dtype: torch.dtype = None,
                  eps: float = None,
                  keep_nyquist: bool = True):
-        super().__init__(mode)
+        super().__init__(sr=sr, mode=mode)
         self.contrast_mode = contrast
         self.mel = mel
         self.keep_nyquist = True
@@ -260,19 +260,29 @@ class Magnitude(_Representation):
 
 class Phase(_Representation):
 
+    def __init__(self, sr: int = 44100, mode: Union[str, None] = None, keep_nyquist: bool = True, unwrap: bool = False):
+        super(Phase, self).__init__(sr=sr, mode=mode, keep_nyquist=keep_nyquist)
+        self.unwrap = unwrap
+
     def __repr__(self):
-        return "Phase(norm=%s)" % self.norm.mode
+        return "Phase(norm=%s, unwrap=%s)" % (self.norm.mode, self.unwrap)
 
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.norm(x.angle())
+        x = x.angle()
+        if self.unwrap:
+            x = unwrap(x)
+        x = self.norm(x)
         if not self.keep_nyquist:
             x = x[..., 1:]
         return x
 
     @torch.jit.export
     def scale_data(self, x: torch.Tensor) -> None:
-        return self.norm.scale_data(x.angle())
+        x = x.angle()
+        if self.unwrap:
+            x = unwrap(x)
+        return self.norm.scale_data(x)
 
     def test_inversion(self, x: torch.Tensor):
         # simulate STFT
