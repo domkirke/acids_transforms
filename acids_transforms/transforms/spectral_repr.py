@@ -419,8 +419,8 @@ class SpectralRepresentation(AudioTransform):
             raise RuntimeError(
                 "SpectralRepresentation should not be called directly.")
         self.keep_nyquist=keep_nyquist
-        self.magnitude=magnitude_transform(sr=sr, **magnitude_args, keep_nyquist=keep_nyquist)
-        self.phase=phase_transform(sr=sr, **phase_args, keep_nyquist=keep_nyquist)
+        self.magnitude = magnitude_transform(sr=sr, **magnitude_args, keep_nyquist=keep_nyquist)
+        self.phase = phase_transform(sr=sr, **phase_args, keep_nyquist=keep_nyquist)
         self.stack=stack
 
     @ torch.jit.export

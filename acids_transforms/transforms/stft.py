@@ -88,6 +88,13 @@ class STFT(AudioTransform):
         return self.hop_length.item()
 
     @torch.jit.export
+    def set_inversion_mode(self, inversion_mode: str) -> None:
+        if inversion_mode in self.get_inversion_modes():
+            self.inversion_mode = inversion_mode
+        else:
+            raise AttributeError('inversion mode %s not valid'%inversion_mode)
+
+    @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x, batch_shape = reshape_batches(x, -1)
         window = self.window[:self.n_fft.item()]
