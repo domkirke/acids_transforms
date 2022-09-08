@@ -1,4 +1,4 @@
-import torch, torch.nn as nn
+import torch, torch.nn as nn, math
 from typing import Union
 from .base import AudioTransform
 from ..utils import frame
@@ -24,7 +24,7 @@ class OverlapAdd(AudioTransform):
         super().__init__()
         self.register_buffer("n_fft", torch.tensor(n_fft))
         self.register_buffer("hop_length", torch.tensor(hop_length))
-        self.frames_out = (self.n_fft // self.hop_length - 1).item()
+        self.frames_out = ((self.n_fft / self.hop_length).floor() - 1).long().item()
         self.register_buffer("input_buffer", torch.zeros(self.frames_out * self.hop_length.item()))
         self.register_buffer("output_buffer", torch.zeros(self.frames_out * self.hop_length.item()))
         self.register_buffer("gain_compensation", torch.tensor(1.))

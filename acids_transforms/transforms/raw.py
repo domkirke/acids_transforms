@@ -214,7 +214,7 @@ class Window(AudioTransform):
 
     @property
     def ratio(self):
-        return self.hop_size.item()
+        return self.hop_size
 
     @torch.jit.export
     def forward_with_time(self, x: torch.Tensor, time: torch.Tensor):

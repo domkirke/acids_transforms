@@ -129,7 +129,7 @@ class STFT(AudioTransform):
 
     @staticmethod
     def get_inversion_modes():
-        return ['griffin_lim', 'keep_input', 'random']
+        return ['griffin_lim', 'keep_input', 'random', 'sinebank']
 
     def _replace_phase_buffer(self, phase: torch.Tensor) -> None:
         self.phase_buffer = phase
@@ -166,6 +166,8 @@ class STFT(AudioTransform):
             phase = torch.pi * 2 * torch.rand_like(x)
             x = x * torch.exp(phase * 1j)
             return torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), window=window, onesided=True)
+        elif (inversion_mode == "sinebank"):
+            return self.get_sinebank_inversion(x)
         else:
             raise ValueError("inversion mode %s not valid." % inversion_mode)
 
@@ -174,6 +176,19 @@ class STFT(AudioTransform):
         hop_length = self.hop_length.item()
         window = self.inv_window[:n_fft]
         return griffinlim(x.transpose(-2, -1), window, n_fft, hop_length, n_fft, 1.0, 30, 0.99, None, True)
+
+    def get_sinebank_inversion(self, x_fft):
+        bpad = (1,) * len(x_fft.shape[:-2])
+        fft_frequencies = torch.linspace(0, self.sr/2, int(self.n_fft.item() / 2 + 1)).view(bpad+(-1, 1))
+        random_phase = 2 * torch.pi * torch.rand(fft_frequencies.shape[-2], 1)
+        x_fft = x_fft / x_fft.abs().max()
+        final_length = self.hop_length.item() * x_fft.shape[-2] + self.n_fft.item()
+        t = torch.linspace(0, final_length / self.sr, final_length).view(bpad+(1, -1))
+        enveloppes = torch.nn.functional.interpolate(x_fft.transpose(-2, -1), final_length, mode="linear") / (2 * torch.pi)
+        x = enveloppes * torch.sin(2 * torch.pi * fft_frequencies * t + random_phase)
+        x = x.sum(-2)
+        x = x / x.max()
+        return x
 
     # TESTS
     def test_inversion(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -203,6 +218,8 @@ class RealtimeSTFT(STFT):
         super().__init__(sr=sr, n_fft=n_fft, hop_length=hop_length,
                          dtype=dtype, inversion_mode=inversion_mode, window=window)
         self.batch_size = batch_size
+        self.register_buffer('random_phase', 2 * torch.pi * torch.rand(int(self.n_fft.item() / 2 + 1)))
+        self.register_buffer('time_index', torch.tensor(0.))
 
     @property
     def scriptable(self):
@@ -223,7 +240,10 @@ class RealtimeSTFT(STFT):
 
     @staticmethod
     def get_inversion_modes():
-        return ['keep_input', 'random']
+        return ['keep_input', 'random', 'sinebank']
+
+    def reset(self, x: torch.Tensor):
+        self.time_index = torch.tensor(0.)
 
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -253,6 +273,23 @@ class RealtimeSTFT(STFT):
     def set_batch_size(self, batch_size: int):
         self.batch_size = batch_size
 
+    def get_sinebank_inversion(self, x_fft):
+        batch_shape = x_fft.shape[:-2]
+        bpad = (1,) * len(batch_shape)
+        if (batch_shape != self.random_phase.shape[:-2]):
+            self.random_phase = 2 * torch.pi * torch.rand(batch_shape + (1, x_fft.size(-1)))
+        # construct phase
+        t = torch.arange(self.n_fft.item()).unsqueeze(0) + torch.arange(x_fft.size(-2)).unsqueeze(1) * self.hop_length.item()
+        t = (t / self.sr + self.time_index).view(bpad + (t.shape[0], 1, t.shape[1]))
+        # get frequencies
+        fft_frequencies = torch.linspace(0, self.sr/2, int(self.n_fft.item() / 2 + 1)).view(bpad + (1, -1, 1))
+        # get sines
+        sines = torch.sin(2 * torch.pi * fft_frequencies * t + self.random_phase.view(batch_shape + (1, -1, 1)))
+        x = x_fft.unsqueeze(-1) * sines
+        x = x.sum(-2) / x_fft.size(-1)
+        self.time_index += (x_fft.size(-2) * self.hop_length.item() + self.n_fft.item()) / self.sr
+        return x
+
     def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = None) -> torch.Tensor:
         window = self.inv_window[:self.n_fft.item()]
         if inversion_mode is None:
@@ -263,6 +300,8 @@ class RealtimeSTFT(STFT):
                 phase = torch.pi * 2 * torch.rand_like(x)
         elif (inversion_mode == "random"):
             phase = torch.pi * 2 * torch.rand_like(x)
+        elif (inversion_mode == "sinebank"):
+            return self.get_sinebank_inversion(x) * window
         else:
             raise ValueError("inversion mode %s not valid." %
                     self.inversion_mode)
@@ -283,19 +322,33 @@ class RealtimeSTFT(STFT):
             return transform, None
 
     def test_inversion(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        from .oadd import OverlapAdd
+        self.reset(x.shape[:-1])
         n_fft = self.n_fft.item()
+        chunk_size = n_fft * 4
         hop_length = self.hop_length.item()
-        x_framed = frame(x, n_fft, hop_length, -1)
-        x_inv_shape = x_framed.size(-2) * hop_length + n_fft
-        outs = {k: torch.zeros(*x.shape[:-1], x_inv_shape, device=x.device) for k in [
-            'direct'] + self.get_inversion_modes()}
-        for n in range(x_framed.size(-2)):
-            x_stft = self.forward(x_framed[..., n, :])
-            outs['direct'][..., n*hop_length:n *
-                           hop_length+n_fft] += self.invert(x_stft)
-            for inv_type in self.get_inversion_modes():
-                outs[inv_type][..., n*hop_length:n*hop_length +
-                               n_fft] += self.invert(x_stft.abs(), inversion_mode=inv_type)
+        oadd = OverlapAdd(n_fft, hop_length)
+        outs = {}
+        x_framed = x.split(chunk_size, -1)
+        # test direct inversion
+        outs["direct"] = []
+        for n in range(len(x_framed)):
+            x_in = oadd(x_framed[n])
+            x_t = self(x_in)
+            x_i = oadd.invert(self.invert(x_t))
+            outs['direct'].append(x_i)
+        outs['direct'] = torch.cat(outs['direct'], -1)
+        # test spectrogram inversion modes
+        for inv_mode in ['sinebank']:#self.get_inversion_modes():
+            self.inversion_mode = inv_mode
+            oadd = OverlapAdd(n_fft, hop_length)
+            outs[inv_mode] = []
+            for n in range(len(x_framed)):
+                x_in = oadd(x_framed[n])
+                x_t = self(x_in)
+                x_i = oadd.invert(self.invert(x_t.abs(), inversion_mode=inv_mode))
+                outs[inv_mode].append(x_i)
+            outs[inv_mode] = torch.cat(outs[inv_mode], -1)
         return outs
 
 
