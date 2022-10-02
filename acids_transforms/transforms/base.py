@@ -129,7 +129,7 @@ class ComposeAudioTransform(AudioTransform):
         if isinstance(other, ComposeAudioTransform):
             return ComposeAudioTransform(other.transforms + self.transforms)
         else:
-            return ComposeAudioTransform([other] + self.transforms)
+            return ComposeAudioTransform(nn.ModuleList([other]) + self.transforms)
 
     def realtime(self):
         return ComposeAudioTransform(transforms=[t.realtime() for t in self.transforms], sr=self.sr)
