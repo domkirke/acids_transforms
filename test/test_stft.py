@@ -121,3 +121,20 @@ def test_scripted_streaming(x):
     scripted.reset()
     y = torch.cat([scripted.invert(scripted(c)) for c in x.split(2048, -1)], -1)
     assert torch.allclose(y[..., scripted.latency:], x[..., :-scripted.latency], atol=1e-4)
+
+
+@pytest.mark.parametrize("chunk", [256, 512, 768, 2048])
+def test_short_chunks(x, chunk):
+    """chunks shorter than the buffer of OverlapAdd (win_length - hop_length samples) give the same stream."""
+    oadd = OverlapAdd(1024, 256)
+    y = torch.cat([oadd.invert(oadd(c)) for c in x.split(chunk, -1)], -1)
+    assert torch.allclose(y[..., 768:], x[..., :-768], atol=1e-5)
+    streaming = StreamingSTFT(n_fft=1024, hop_length=256, mode=["magnitude", "phase"])
+    chunks = x.split(chunk, -1)
+    frames = [streaming(c) for c in chunks]
+    assert all(f.shape[-2] == c.shape[-1] // 256 for f, c in zip(frames, chunks))
+    reference = StreamingSTFT(n_fft=1024, hop_length=256, mode=["magnitude", "phase"])
+    assert torch.allclose(torch.cat(frames, -2), torch.cat([reference(c) for c in x.split(2048, -1)], -2), atol=1e-5)
+    streaming.reset()
+    y = torch.cat([streaming.invert(streaming(c)) for c in x.split(chunk, -1)], -1)
+    assert torch.allclose(y[..., 768:], x[..., :-768], atol=1e-4)

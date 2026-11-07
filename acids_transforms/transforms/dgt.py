@@ -411,6 +411,9 @@ class RealtimeDGT(DGT):
         Y[:, 1:-1, 1:-1] = torch.log(mag)
         Y[:, :, 0] = Y[:, :, 1]
         Y[:, :, -1] = Y[:, :, -2]
+        # time edges (read by dxdt) : left uninitialized, they gave random nans in pghi
+        Y[:, 0, :] = Y[:, 1, :]
+        Y[:, -1, :] = Y[:, -2, :]
         dxdw = (Y[:, 1:-1, 2:] - Y[:, 1:-1, :-2])/2
         dxdt = (3 * Y[..., 2:, 1:-1] - 4 * Y[..., 1:-1, 1:-1] + Y[..., 0:-2, 1:-1])/2
         fgradw = dxdw/fmul + (2*torch.pi*self.hop_length/self.n_fft) * (torch.arange(math.floor(self.n_fft/2)+1))

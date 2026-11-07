@@ -39,7 +39,6 @@ class OverlapAdd(AudioTransform):
             input_buffer = torch.zeros(shape, dtype=x.dtype, device=x.device)
         else:
             input_buffer = self.input_buffer.clone()
-        self.input_buffer =  x[..., -(self.frames_out * self.hop_length):]
         return input_buffer
 
     def get_output_buffer(self, x: torch.Tensor):
@@ -71,6 +70,8 @@ class OverlapAdd(AudioTransform):
     def forward(self, x: torch.Tensor)-> torch.Tensor:
         input_buffer = self.get_input_buffer(x)
         x = torch.cat([input_buffer, x], dim=-1)
+        # the buffer keeps the last samples of the stream (and not of the chunk, that may be shorter than the buffer)
+        self.input_buffer = x[..., x.size(-1) - self.frames_out * self.hop_length:]
         # chunks must have a multiple of hop_length samples
         return x.unfold(-1, self.n_fft, self.hop_length)
     
