@@ -35,8 +35,7 @@ Transpose | yes | yes
 ```
 git clone https://github.com/domkirke/acids_transforms.git
 cd acids_transforms
-pip install -r requirements.txt
-python3 setup.py install
+pip install .
 ```
 
 ## Usage

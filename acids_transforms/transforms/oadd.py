@@ -18,50 +18,51 @@ class OverlapAdd(AudioTransform):
         return False
 
     def __repr__(self):
-        return "OverlapAdd(n_fft=%s, hop_length=%s)"%(self.n_fft.item(), self.hop_length.item())
+        return "OverlapAdd(n_fft=%s, hop_length=%s)"%(self.n_fft, self.hop_length)
     
     def __init__(self, n_fft: int = 1024, hop_length: int = 128, dim:int = -1) -> None:
         super().__init__()
-        self.register_buffer("n_fft", torch.tensor(n_fft))
-        self.register_buffer("hop_length", torch.tensor(hop_length))
-        self.frames_out = ((self.n_fft / self.hop_length).floor() - 1).long().item()
-        self.register_buffer("input_buffer", torch.zeros(self.frames_out * self.hop_length.item()))
-        self.register_buffer("output_buffer", torch.zeros(self.frames_out * self.hop_length.item()))
-        self.register_buffer("gain_compensation", torch.tensor(1.))
-        self.gain_compensation = self._invert_without_update(self._forward_without_update(torch.ones(12, (self.frames_out+1) *self.n_fft))).max()
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.frames_out = math.floor(self.n_fft / self.hop_length) - 1
+        self.register_buffer("input_buffer", torch.zeros(self.frames_out * self.hop_length))
+        self.register_buffer("output_buffer", torch.zeros(self.frames_out * self.hop_length))
+        # each sample is covered by n_fft / hop_length frames : overlap-adding rectangular frames gives back the input
+        # (synthesis windows of spectral transforms must sum to n_fft / hop_length, see RealtimeSTFT)
+        self.register_buffer("gain_compensation", torch.tensor(float(self.n_fft) / self.hop_length))
 
     def get_input_buffer(self, x: torch.Tensor):
         shape = x.shape
         if self.input_buffer.shape[:-1] != shape[:-1]:
             shape = shape[:-1]
-            shape = shape + torch.Size([int(self.frames_out * self.hop_length.item())])
-            input_buffer = torch.zeros(shape)
+            shape = shape + (int(self.frames_out * self.hop_length),)
+            input_buffer = torch.zeros(shape, dtype=x.dtype, device=x.device)
         else:
             input_buffer = self.input_buffer.clone()
-        self.input_buffer =  x[..., -(self.frames_out * self.hop_length.item()):]
+        self.input_buffer =  x[..., -(self.frames_out * self.hop_length):]
         return input_buffer
 
     def get_output_buffer(self, x: torch.Tensor):
         shape = x.shape
         if self.output_buffer.shape[:-1] != shape[:-2]:
             shape = shape[:-2]
-            shape = shape + torch.Size([int(self.frames_out * self.hop_length.item())])
-            output_buffer = torch.zeros(shape)
+            shape = shape + torch.Size([int(self.frames_out * self.hop_length)])
+            output_buffer = torch.zeros(shape, dtype=x.dtype, device=x.device)
         else:
             output_buffer = self.output_buffer.clone()
         return output_buffer
 
     def _forward_without_update(self, x: torch.Tensor) -> torch.Tensor:
-        return frame(x, self.n_fft.item(), self.hop_length.item(), dim=-1)
+        return frame(x, self.n_fft, self.hop_length, dim=-1)
 
     def _invert_without_update(self, x: torch.Tensor, inversion_mode: Union[str, None] = None, tolerance: Union[float, None] = None) -> torch.Tensor:
         # assert x.size(-1) % self.hop_length == 0, "input dim must be a factor of the hop length"
-        n_fft = self.n_fft.item()
-        hop_length = self.hop_length.item()
+        n_fft = self.n_fft
+        hop_length = self.hop_length
         overlap = int(n_fft / hop_length)
         # perform overlap_add
         out_size = x.shape[:-2] + torch.Size([int((x.size(-2)) * hop_length + n_fft)])
-        out = torch.zeros(out_size)
+        out = torch.zeros(out_size, dtype=x.dtype, device=x.device)
         for i in range(x.size(-2)):
             out[..., i * hop_length : i * hop_length + n_fft] += x[..., i, :] / (overlap / 2)
         return out / self.gain_compensation
@@ -70,8 +71,8 @@ class OverlapAdd(AudioTransform):
     def forward(self, x: torch.Tensor)-> torch.Tensor:
         input_buffer = self.get_input_buffer(x)
         x = torch.cat([input_buffer, x], dim=-1)
-        x_framed = frame(x, self.n_fft.item(), self.hop_length.item(), dim=-1)
-        return x_framed
+        # chunks must have a multiple of hop_length samples
+        return x.unfold(-1, self.n_fft, self.hop_length)
     
     @torch.jit.export
     def forward_with_time(self, x: torch.Tensor, time: torch.Tensor):
@@ -90,13 +91,13 @@ class OverlapAdd(AudioTransform):
     @torch.jit.export
     def invert(self, x: torch.Tensor, inversion_mode: Union[str, None] = None, tolerance: Union[float, None] = None) -> torch.Tensor:
         # assert x.size(-1) % self.hop_length == 0, "input dim must be a factor of the hop length"
-        n_fft = self.n_fft.item()
-        hop_length = self.hop_length.item()
+        n_fft = self.n_fft
+        hop_length = self.hop_length
         overlap = int(n_fft / hop_length)
         # perform overlap_add
         output_buffer = self.get_output_buffer(x)
         out_size = x.shape[:-2] + torch.Size([int((x.size(-2)-1) * hop_length + n_fft  - output_buffer.size(-1))])
-        recompose_buffer = torch.cat([output_buffer, torch.zeros(out_size)], -1)
+        recompose_buffer = torch.cat([output_buffer, torch.zeros(out_size, dtype=x.dtype, device=x.device)], -1)
         for i in range(x.size(-2)):
             recompose_buffer[..., i * hop_length : i * hop_length + n_fft] += x[..., i, :] 
         out = recompose_buffer[..., :-(self.frames_out * hop_length)]

@@ -1,5 +1,7 @@
 from argparse import ArgumentError
 from typing import Tuple, List
+
+import torch.lib
 from . import heapq
 import torch
 import os
@@ -136,8 +138,8 @@ def get_fft_idx(L):
 
 
 def pad(tensor: torch.Tensor, target_size: int, dim: int):
-    if tensor.size(dim) > target_size:
-        return tensor
+    # if tensor.size(dim) > target_size:
+    #     return tensor
     tensor_size = list(tensor.shape)
     tensor_size[dim] = target_size - tensor.shape[dim]
     cat_tensor = torch.zeros(
@@ -145,26 +147,59 @@ def pad(tensor: torch.Tensor, target_size: int, dim: int):
     return torch.cat([tensor, cat_tensor], dim=dim)
 
 
-def frame(tensor: torch.Tensor, wsize: int, hsize: int, dim: int):
-    if dim < 0:
-        dim = tensor.ndim + dim
-    if not tensor.is_contiguous():
-        tensor = tensor.contiguous()
-    n_windows = (tensor.shape[dim] - wsize) // hsize
-    if tensor.shape[dim] >= (n_windows * hsize + wsize):
-        n_windows += 1
-    tensor = pad(tensor, n_windows * hsize + wsize,  dim)
-    shape = list(tensor.shape)
-    shape[dim] = n_windows
-    shape.insert(dim+1, wsize)
-    # shape = shape[:dim] + (n_windows, wsize) + shape[dim+1:]
-    strides = [tensor.stride(i) for i in range(tensor.ndim)]
-    strides.insert(dim, hsize)
-    # strides = strides[:dim] + (hsize,) + strides[dim:]
-    # strides = list(strides[dim:], (strides[dim]*hsize) + [hsize * new_stride] + list(strides[dim+1:])
-    return torch.as_strided(tensor, shape, strides)
+@torch.library.custom_op("acids_transforms::frame", mutates_args=())
+def frame(x: torch.Tensor, frame_length: int, hop_length: int, dim: int = -1, librosa_order: bool = False) -> torch.Tensor:
+    """
+    Create overlapping frames (sliding windows) of length frame_length along axis
+    with hop size hop_length.
 
-    
+    Args:
+        x: torch.Tensor
+        frame_length: window length (int > 0)
+        hop_length: hop size (int > 0)
+        axis: axis along which to frame (default: -1)
+        librosa_order: if True, return shape [..., frame_length, n_frames] to match librosa.util.frame;
+                    if False, return shape [..., n_frames, frame_length] (PyTorch unfold default order).
+
+    Returns:
+        A strided view of x with overlapping frames.
+        Shape:
+        - if librosa_order=True:  [..., frame_length, n_frames]
+        - else:                   [..., n_frames, frame_length]
+
+    Notes:
+        - This is a view; use .contiguous() or .clone() if you need a copy.
+        - Raises if `frame_length > length along axis`.
+    """
+    if frame_length <= 0 or hop_length <= 0:
+        raise ValueError("frame_length and hop_length must be positive integers")
+
+    ndim = x.dim()
+    dim = dim if dim >= 0 else (ndim + dim)
+    if not (0 <= dim < ndim):
+        raise ValueError(f"axis out of range for tensor with dim={ndim}: got {dim}")
+
+    x_m = x.clone().movedim(dim, -1)  # bring target axis to the end
+    n = x_m.shape[-1]
+    if n < frame_length:
+        raise ValueError(f"Input length along axis ({n}) is smaller than frame_length ({frame_length})")
+
+    # Unfold replaces the framed axis by n_frames and appends a new trailing dimension of size frame_length
+    y = x_m.unfold(-1, frame_length, hop_length)  # shape: [..., n_frames, frame_length]
+
+    if librosa_order:
+        # Move the new trailing frame_length dim before the n_frames dim
+        y = y.movedim(-1, -2)  # [..., frame_length, n_frames]
+
+    return y    
+
+@frame.register_fake
+def _(x: torch.Tensor, frame_length: int, hop_length: int, dim: int = -1, librosa_order: bool = True) -> torch.Tensor:
+    if dim < 0: axis += x.ndim
+    shape = list(x.shape[:axis]) + [(x.shape[axis] - frame_length) // frame_length, frame_length] + list(x.shape[axis+1:])
+    return torch.empty(shape).to(x)
+
+
 def reshape_batches(x: torch.Tensor, dim: int, allow_clone: bool = True):
     batch_size = x.shape[:dim]
     event_size = x.shape[dim:]

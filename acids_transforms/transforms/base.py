@@ -1,4 +1,5 @@
 import torch.nn as nn
+import functools
 import torch
 from typing import Union
 
@@ -11,8 +12,11 @@ InversionEnumType = Union[str, None]
 
 
 class AudioTransform(nn.Module):
+    # python-side descriptors, not compiled by torch.jit.script (e.g. tracable returns a global flag)
+    __jit_unused_properties__ = ["invertible", "scriptable", "tracable", "needs_scaling", "ratio"]
     invertible = True
     scriptable = False
+    tracable = False
     needs_scaling = False
 
     def __init__(self, sr=44100):
@@ -100,6 +104,13 @@ class ComposeAudioTransform(AudioTransform):
     def scriptable(self):
         for t in self.transforms:
             if not t.scriptable:
+                return False
+        return True
+
+    @property
+    def tracable(self):
+        for t in self.transforms:
+            if not t.tracable:
                 return False
         return True
 
@@ -198,3 +209,22 @@ def apply_invert_transform_to_list(transform, data, time=None, **kwargs):
         outs = [transform.invert(data[i], time=time[i], **kwargs)
                 for i in range(len(data))]
         return [o[0] for o in outs], [o[1] for o in outs]
+
+
+_CanTrace = False
+make_fx = None
+try: 
+    from torch.fx.experimental.proxy_tensor import make_fx as tft_make_fx
+
+    def make_fx(obj, *args, _fn="forward", **kwargs):
+        if _fn == "forward": 
+            return tft_make_fx(obj, *args, **kwargs)
+        else:
+            # @functools.wraps(getattr(obj, _fn))
+            def _closure(*args, **kwargs):
+                return getattr(obj, _fn)(*args, **kwargs)
+            return tft_make_fx(_closure, *args, **kwargs)
+
+    _CanTrace = True
+except ModuleNotFoundError:
+    pass

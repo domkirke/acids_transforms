@@ -1,7 +1,7 @@
 import torch
 import math
 from enum import Enum
-from .stft import STFT, RealtimeSTFT
+from .stft import realtime_frames, overlap_add_frames, STFT, RealtimeSTFT
 from .base import AudioTransform, InversionEnumType
 from ..utils.heapq import heappop, heappush
 from ..utils.misc import frame, reshape_batches
@@ -24,7 +24,7 @@ class DGT_INVERSION_MODES(Enum):
 class DGT(STFT):
 
     def __repr__(self):
-        repr_str = f"DGT(n_fft={self.n_fft.item()}, hop_length={self.hop_length.item()}, " \
+        repr_str = f"DGT(n_fft={self.n_fft}, hop_length={self.hop_length}, " \
                    f"inversion_mode = {self.inversion_mode})"
         return repr_str
 
@@ -32,11 +32,8 @@ class DGT(STFT):
                  inversion_mode: InversionEnumType = "pghi", tolerance: float = 1.e-2):
         AudioTransform.__init__(self, sr)
         dtype = dtype or torch.get_default_dtype()
-        self.register_buffer("n_fft", torch.zeros(1).long())
-        self.register_buffer("hop_length", torch.zeros(1).long())
         self.register_buffer("window", torch.zeros(MAX_NFFT))
         self.register_buffer("inv_window", torch.zeros(MAX_NFFT))
-        self.register_buffer("gamma", torch.zeros(1))
         self.register_buffer("eps",  torch.tensor(
             torch.finfo(dtype).eps, dtype=dtype))
         self.register_buffer("phase_buffer", torch.zeros(0))
@@ -54,18 +51,17 @@ class DGT(STFT):
 
     def realtime(self):
         inversion_mode = self.inversion_mode if self.inversion_mode in RealtimeDGT.get_inversion_modes() else "pghi"
-        return RealtimeDGT(sr=self.sr, n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), inversion_mode = inversion_mode)
+        return RealtimeDGT(sr=self.sr, n_fft=self.n_fft, hop_length=self.hop_length, inversion_mode = inversion_mode)
 
     @property
     def ratio(self):
-        return self.hop_length.item()
+        return self.hop_length
 
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x, batch_shape = reshape_batches(x, -1)
-        window = self.window[:self.n_fft.item()]
-        x_dgt = torch.stft(x, n_fft=self.n_fft.item(), hop_length=self.hop_length.item(
-        ), window=window, return_complex=True, onesided=True).transpose(-2, -1)
+        window = self.window[:self.n_fft]
+        x_dgt = torch.stft(x, n_fft=int(self.n_fft), hop_length=int(self.hop_length), window=window, return_complex=True, onesided=True).transpose(-2, -1)
         self._replace_phase_buffer(x_dgt.angle())
         return x_dgt.reshape(batch_shape + x_dgt.shape[-2:])
 
@@ -88,34 +84,37 @@ class DGT(STFT):
         if not torch.is_complex(x):
             x_inv = self.invert_without_phase(x, inversion_mode)
         else:
-            window = self.inv_window[:self.n_fft.item()]
-            x_inv = torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), window=window, onesided=True)
+            window = self.inv_window[:self.n_fft]
+            x_inv = torch.istft(x.transpose(-2, -1), n_fft=self.n_fft, hop_length=self.hop_length, window=window, onesided=True)
         return x_inv.reshape(batch_shape + x_inv.shape[-1:])            
 
     @torch.jit.export
     def set_params(self, n_fft: int, hop_length: int) -> None:
-        self.n_fft.fill_(n_fft)
-        self.hop_length.fill_(hop_length)
+        self.n_fft = int(n_fft)
+        self.hop_length = int(hop_length)
         self.window.zero_()
         self.inv_window.zero_()
-        self.window[:self.n_fft.item()] = self._get_window()
-        self.inv_window[:self.n_fft.item()] = self._get_dual_window()
+        self.window[:self.n_fft] = self._get_window()
+        self.inv_window[:self.n_fft] = self._get_dual_window()
         self.gamma = self._get_gamma()
 
-    def _get_gamma(self) -> torch.Tensor:
+    def _get_gamma(self) -> float:
         return 2*torch.pi*((-self.n_fft**2/(8*math.log(0.01)))**.5)**2
 
     def _get_window(self) -> torch.FloatTensor:
         lambda_ = (-self.n_fft**2/(8*math.log(0.01)))**.5
-        n = torch.arange(0, 2*self.n_fft.item()+1) - (2*self.n_fft.item()) / 2
+        n = torch.arange(0, 2*self.n_fft+1) - (2*self.n_fft) / 2
         w = torch.exp(-n**2 / (2 * (lambda_ * 2)**2))
-        return w[1:2*self.n_fft.item()+1:2]
+        return w[1:2*self.n_fft+1:2]
 
     def _get_dual_window(self) -> torch.Tensor:
-        gsynth = torch.zeros(self.n_fft.item())
-        for l in range(int(self.n_fft.item())):
+        return self._canonical_dual_window()
+
+    def _canonical_dual_window(self) -> torch.Tensor:
+        gsynth = torch.zeros(self.n_fft)
+        for l in range(self.n_fft):
             denom = 0
-            for n in range(int(-self.n_fft.item()//self.hop_length.item()), int(self.n_fft.item()//self.hop_length.item() + 1)):
+            for n in range(int(-self.n_fft//self.hop_length), int(self.n_fft//self.hop_length + 1)):
                 dl = l - n*self.hop_length
                 if dl >= 0 and dl < self.n_fft:
                     denom += self.window[dl]**2
@@ -123,7 +122,7 @@ class DGT(STFT):
         return gsynth
 
     def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = None) -> torch.Tensor:
-        window = self.inv_window[:self.n_fft.item()]
+        window = self.inv_window[:self.n_fft]
         phase = torch.tensor(0)
         if inversion_mode is None:
             inversion_mode = self.inversion_mode
@@ -151,7 +150,7 @@ class DGT(STFT):
                              self.inversion_mode)
         x = x * torch.exp(phase * torch.full(phase.size(),
                                              1j, device=phase.device))
-        return torch.istft(x.transpose(-2, -1), n_fft=self.n_fft.item(), hop_length=self.hop_length.item(), window=window, onesided=True)
+        return torch.istft(x.transpose(-2, -1), n_fft=int(self.n_fft), hop_length=int(self.hop_length), window=window, onesided=True)
 
     def pghi(self, mag: torch.Tensor, tolerance: float = 1.e-4) -> torch.Tensor:
         mag = torch.clamp(mag.clone(), self.eps, None)
@@ -164,6 +163,9 @@ class DGT(STFT):
     @staticmethod
     def get_inversion_modes():
         return ["pghi", "griffin_lim", "random", "keep_input", "sinebank"]
+
+    # PGHI integrates phases with a heap, depending on values : it cannot be traced
+    untracable_inversion_modes = ["keep_input", "pghi"]
     
     def perform_hgi(self, X: torch.Tensor, tgradw: torch.Tensor, fgradw: torch.Tensor, abstol: float = 1e-7, tol: float = 1.e-2) -> torch.Tensor:
         spectrogram = X
@@ -221,7 +223,7 @@ class DGT(STFT):
 
     def modgabphasegrad(self, mag: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         fmul = self.gamma/(self.hop_length * self.n_fft)
-        Y = torch.empty((mag.shape[0]+2, mag.shape[1]+2), dtype=mag.dtype)
+        Y = torch.empty((mag.shape[0]+2, mag.shape[1]+2)).to(mag)
         Y[1:-1, 1:-1] = torch.log(mag)
         Y[0, :] = Y[1, :]
         Y[-1, :] = Y[-2, :]
@@ -231,7 +233,7 @@ class DGT(STFT):
         dxdt = (Y[2:, 1:-1]-Y[:-2, 1:-1])/2
         # dxdt = (3 * Y[..., 2:, 1:-1] - 4 * Y[..., 1:-1, 1:-1] + Y[..., 0:-2, 1:-1])/2
         fgradw = dxdw/fmul + (2*torch.pi*self.hop_length/self.n_fft) * \
-            torch.arange(int(self.n_fft/2)+1).unsqueeze(0)
+            torch.arange(int(self.n_fft/2)+1).unsqueeze(0).to(mag)
         tgradw = -fmul*dxdt + torch.pi
         return (tgradw, fgradw)
 
@@ -248,17 +250,36 @@ class RealtimeDGT(DGT):
             'hgi_mag_buffer', torch.zeros(*self.batch_size, 2, n_fft//2+1))
         self.register_buffer("hgi_phase_buffer",
                              torch.zeros(*self.batch_size, n_fft//2+1))
-        self.register_buffer('random_phase', 2 * torch.pi * torch.rand(int(self.n_fft.item() / 2 + 1)))
+        self.register_buffer('random_phase', 2 * torch.pi * torch.rand(int(n_fft / 2 + 1)))
         self.register_buffer('time_index', torch.tensor(0.)) 
 
     def __repr__(self):
-        repr_str = f"RealtimeDGT(n_fft={self.n_fft.item()}, hop_length={self.hop_length.item()}, " \
+        repr_str = f"RealtimeDGT(n_fft={self.n_fft}, hop_length={self.hop_length}" \
                    f"inversion_mode = {self.inversion_mode})"
         return repr_str
 
     @staticmethod
     def get_inversion_modes():
         return ['random', 'pghi', 'keep_input', 'sinebank']
+
+    @classmethod
+    def _tracing_input(cls, transform: AudioTransform, x: torch.Tensor) -> torch.Tensor:
+        """frame-wise transforms take frames (..., n_frames, n_fft), as given by OverlapAdd."""
+        return realtime_frames(x, transform.n_fft, transform.hop_length)
+
+    @classmethod
+    def _tracing_output(cls, transform: AudioTransform, y: torch.Tensor) -> torch.Tensor:
+        return overlap_add_frames(y, transform.hop_length)
+
+    @classmethod
+    def _before_tracing(cls, transform: AudioTransform, x: torch.Tensor) -> None:
+        # PGHI buffers are reset when the batch shape changes : resetting them inside a trace would store symbolic
+        # shapes in the module, that leak into later traces
+        transform.reset(list(x.shape[:-2]))
+
+    def _get_dual_window(self) -> torch.Tensor:
+        # synthesis frames are overlap-added by OverlapAdd, that compensates a gain of n_fft / hop_length
+        return self._canonical_dual_window() * (float(self.n_fft) / self.hop_length)
 
     @torch.jit.export
     def get_batch_size(self) -> List[int]:
@@ -283,7 +304,7 @@ class RealtimeDGT(DGT):
 
     @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        window = self.window[:self.n_fft.item()]
+        window = self.window[:self.n_fft]
         x_dgt = torch.fft.rfft(x * window)
         self._replace_phase_buffer(x_dgt.angle())
         return x_dgt
@@ -298,14 +319,14 @@ class RealtimeDGT(DGT):
             x_rec = self.invert_without_phase(x, inversion_mode)
             return x_rec
         else:
-            inv_window = self.inv_window[:self.n_fft.item()]
+            inv_window = self.inv_window[:self.n_fft]
             return torch.fft.irfft(x) * inv_window
 
     def invert_without_phase(self, x: torch.Tensor, inversion_mode: InversionEnumType = None) -> torch.Tensor:
         batch_size = x.shape[:-2]
         if batch_size != self.batch_size:
             self.reset(batch_size)
-        window = self.inv_window[:self.n_fft.item()]
+        window = self.inv_window[:self.n_fft]
         phase = torch.tensor(0)
         if inversion_mode is None:
             inversion_mode = self.inversion_mode
@@ -359,18 +380,18 @@ class RealtimeDGT(DGT):
         if (batch_shape != self.random_phase.shape[:-2]):
             self.random_phase = 2 * torch.pi * torch.rand(batch_shape + (1, x_fft.size(-1)))
         # construct phase
-        t = torch.arange(self.n_fft.item()).unsqueeze(0) + torch.arange(x_fft.size(-2)).unsqueeze(1) * self.hop_length.item()
+        t = torch.arange(self.n_fft).unsqueeze(0) + torch.arange(x_fft.size(-2)).unsqueeze(1) * self.hop_length
         t = (t / self.sr + self.time_index).view(bpad + (t.shape[0], 1, t.shape[1]))
         # get frequencies
-        fft_frequencies = torch.linspace(0, self.sr/2, int(self.n_fft.item() / 2 + 1)).view(bpad + (1, -1, 1))
+        fft_frequencies = torch.linspace(0, self.sr/2, int(self.n_fft / 2 + 1)).view(bpad + (1, -1, 1))
         # get sines
         sines = torch.sin(2 * torch.pi * fft_frequencies * t + self.random_phase.view(batch_shape + (1, -1, 1)))
         x = x_fft.unsqueeze(-1) * sines
         x = x.sum(-2) / x_fft.size(-1)
-        self.time_index += (x_fft.size(-2) * self.hop_length.item() + self.n_fft.item()) / self.sr
+        self.time_index += (x_fft.size(-2) * self.hop_length + self.n_fft) / self.sr
         return x
 
-    def _get_gamma(self) -> torch.Tensor:
+    def _get_gamma(self) -> float:
         return (-self.n_fft**2/(8*math.log(0.01)))**.5
         # return 2*torch.pi*((-self.n_fft**2/(8*math.log(0.01)))**.5)**2
         # return - (torch.pi / 4) * (self.n_fft**2 / math.log(self.window[0])
@@ -392,7 +413,7 @@ class RealtimeDGT(DGT):
         Y[:, :, -1] = Y[:, :, -2]
         dxdw = (Y[:, 1:-1, 2:] - Y[:, 1:-1, :-2])/2
         dxdt = (3 * Y[..., 2:, 1:-1] - 4 * Y[..., 1:-1, 1:-1] + Y[..., 0:-2, 1:-1])/2
-        fgradw = dxdw/fmul + (2*torch.pi*self.hop_length/self.n_fft) * (torch.arange(math.floor(self.n_fft.item()/2)+1))
+        fgradw = dxdw/fmul + (2*torch.pi*self.hop_length/self.n_fft) * (torch.arange(math.floor(self.n_fft/2)+1))
         tgradw = -fmul * dxdt + torch.pi
         return (tgradw, fgradw)
 
@@ -466,7 +487,7 @@ class RealtimeDGT(DGT):
         return phase[2:]
 
     def test_forward(self, x: torch.Tensor, time: torch.Tensor = None):
-        x = frame(x, self.n_fft.item(), self.hop_length.item(), -1)
+        x = frame(x, self.n_fft, self.hop_length, -1)
         transform = []
         for i in range(x.shape[-2]):
             transform.append(self(x[..., i, :]))
@@ -480,9 +501,9 @@ class RealtimeDGT(DGT):
     def test_inversion(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         from .oadd import OverlapAdd
         self.reset(x.shape[:-1])
-        n_fft = self.n_fft.item()
+        n_fft = self.n_fft
         chunk_size = n_fft * 4
-        hop_length = self.hop_length.item()
+        hop_length = self.hop_length
         oadd = OverlapAdd(n_fft, hop_length)
         outs = {}
         x_framed = x.split(chunk_size, -1)
@@ -510,7 +531,7 @@ class RealtimeDGT(DGT):
 
     @classmethod
     def test_scripted_transform(cls, transform: AudioTransform, invert: bool = True):
-        x = torch.zeros(2, 1, transform.n_fft.item())
+        x = torch.zeros(2, 1, transform.n_fft)
         transform.reset(list(x.shape[:-1]))
         x_t = transform(x)
         if cls.invertible:

@@ -1,4 +1,5 @@
 import torch
+from pathlib import Path
 import torchaudio
 import os
 import pytest
@@ -24,6 +25,12 @@ def get_invertible_transforms():
     audio_transforms = get_audio_transforms()
     audio_transforms = list(filter(lambda x: x().invertible, audio_transforms))
     return audio_transforms
+
+def get_tracable_transforms(): 
+    audio_transforms = get_audio_transforms()
+    audio_transforms = list(filter(lambda x: x().tracable, audio_transforms))
+    return audio_transforms
+
 
 @pytest.mark.parametrize("transform", get_audio_transforms())
 def test_forward(test_files, transform: AudioTransform):
@@ -59,6 +66,7 @@ def test_inversion(test_files, transform: AudioTransform):
     return True
 
 
+
 @pytest.mark.parametrize("transform_type", get_scriptable_transforms())
 def test_scriptable(transform_type):
     transform = transform_type()
@@ -66,6 +74,18 @@ def test_scriptable(transform_type):
     transform_type.test_scripted_transform(
         scripted_transform, invert=transform.invertible)
     return True
+
+AUDIO_OUT_DIR = Path("test/tracing")
+@pytest.mark.parametrize("transform_type", get_tracable_transforms())
+def test_tracing(test_files, transform_type):
+    os.makedirs(str(AUDIO_OUT_DIR), exist_ok=True)
+    transform = transform_type()
+    fns, outs = transform_type.test_tracable_transform(transform, test_files)
+    for k, v in outs.items():
+        for i in range(test_files[0].shape[0]):
+            torchaudio.save(str(AUDIO_OUT_DIR / f"{k}_{test_files[1][i]}.wav"), v[i], sample_rate = transform.sr)
+    return True
+
 
 
 combinations = {
